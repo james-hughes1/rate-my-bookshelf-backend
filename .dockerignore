@@ -1,0 +1,30 @@
+# Python cache and env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py~
+.env
+
+# Build / dependency caches
+poetry.lock
+*.egg-info/
+*.dist-info/
+build/
+dist/
+.eggs/
+
+# Local files and data
+images/
+uploads/
+tmp/
+cache/
+logs/
+tests/
+
+# IDEs
+.vscode/
+
+# Git
+.git/
+.gitignore
