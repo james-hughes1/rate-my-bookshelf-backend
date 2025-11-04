@@ -43,6 +43,11 @@ COPY . .
 EXPOSE 8080
 
 # -----------------------
+# Pre-download EasyOCR weights (during build)
+# -----------------------
+RUN python -c "from app.services.ocr import init_easyocr; init_easyocr()"
+
+# -----------------------
 # Run FastAPI via Poetry
 # -----------------------
 CMD ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
