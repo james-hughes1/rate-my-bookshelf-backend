@@ -7,6 +7,13 @@ from ..services.llm_client import get_books_from_ocr, format_books_for_prompt, a
 
 router = APIRouter()
 
+@router.get("/ping")
+async def ping():
+    """
+    Simple endpoint to test backend connectivity and CORS.
+    """
+    return {"status": "ok", "message": "Backend is reachable!"}
+
 @router.post("/process")
 async def upload_bookshelf(file: UploadFile = File(...)):
     """
