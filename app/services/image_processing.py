@@ -25,7 +25,7 @@ class SimpleSegmenter:
     def __init__(self, image_path, min_size=None,
                  center_penalty=0.2, soft_aspect_threshold=3.0,
                  hard_aspect_threshold=5.0, score_threshold=0.2,
-                 min_child_ratio=0.3):
+                 min_child_ratio=0.3, max_dim=1024):
         """
         Initialize the SimpleSegmenter with the given parameters.
         """
@@ -33,6 +33,11 @@ class SimpleSegmenter:
         if image.shape[2] == 3:
             # Convert BGR → RGB if it looks like BGR (OpenCV default)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        h, w = image.shape[:2]
+        scale = min(max_dim / h, max_dim / w, 1.0)
+        if scale < 1.0:
+            image = cv2.resize(image, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+
         self.image = image
         self.gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         if min_size is None:
