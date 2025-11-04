@@ -1,3 +1,4 @@
+import time
 from fastapi import APIRouter, UploadFile, File
 from fastapi.responses import JSONResponse
 from ..services.image_processing import SimpleSegmenter
@@ -29,32 +30,48 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     # Convert predictions to prompt
     prompt = ocr_text_prompt(predictions)
 
-    # # Send prompt to LLM
-    # books = get_books_from_ocr(prompt)
+    # Send prompt to LLM
+    books = get_books_from_ocr(prompt)
+    print("BOOKS DISCOVERED: \n", books)
+    time.sleep(5)
 
-    # # Format books for prompt
-    # formatted_books = format_books_for_prompt(books)
+    # Format books for prompt
+    formatted_books = format_books_for_prompt(books, confidence_threshold=0.5)
+    print("PROMPT: \n", formatted_books)
 
-    # # Give a recommendation
-    # recommendation = analyse_bookshelf(formatted_books, mode='recommendation')
-    # book_recommendation = recommendation.recommended_book
-    # explanation = recommendation.explanation
-
-    # # Describe in 3 words
-    # three_words = analyse_bookshelf(formatted_books, mode='three_words')
-    # words = ", ".join([three_words.word_one, three_words.word_two, three_words.word_three])
-
-    # # Score the bookshelf
-    # scores = analyse_bookshelf(formatted_books, mode='scores')
-    # age = scores.age
-    # intensity = scores.intensity
-    # mood = scores.mood
-    # popularity = scores.popularity
-    # focus = scores.focus
-    # realism = scores.realism
+    # Analyse the bookshelf
+    analysis = analyse_bookshelf(formatted_books, mode='analysis')
+    age = analysis.age
+    intensity = analysis.intensity
+    mood = analysis.mood
+    popularity = analysis.popularity
+    focus = analysis.focus
+    realism = analysis.realism
+    word_one = analysis.word_one
+    word_two = analysis.word_two
+    word_three = analysis.word_three
+    book_recommendation = analysis.recommended_book
+    explanation = analysis.explanation
 
     return JSONResponse(
         {
-            "prompt": prompt,
+            "books": [b.dict() for b in books],
+            "recommendation": {
+                "book": book_recommendation,
+                "explanation": explanation
+            },
+            "three_words": {
+                "word_one": word_one,
+                "word_two": word_two,
+                "word_three": word_three
+            },
+            "scores": {
+                "age": age,
+                "intensity": intensity,
+                "mood": mood,
+                "popularity": popularity,
+                "focus": focus,
+                "realism": realism
+            }
         }
     )

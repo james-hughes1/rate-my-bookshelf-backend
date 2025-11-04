@@ -17,7 +17,7 @@ PROMPT_BOOKS = """
 
     Your task:
     1. For each scan, identify the books.
-    2. Output a JSON array containing the each book you find, and include the index, title, author, and confidence score.
+    2. Output a JSON array containing the each book you find, and include the index, title, author, and confidence score between 0 and 1.
     3. If a scan is empty or cannot be identified, you may skip it or leave title/author blank.
     4. There may be multiple books per scan.
 
@@ -65,6 +65,24 @@ PROMPT_BOOKSHELF_SCORES = """
     Here are the books you identified:
 """
 
+PROMPT_ANALYSE_SHELF = """
+    You are an insightful and creative literary assistant.
+    You have already analyzed the list of scanned books on this person's bookshelf, including each title, author, and confidence score (which reflects how certain the identification from the image scan is).
+    
+    Your goal is now to analyse this person's bookshelf and help them understand their reading tastes and preferences, and provide a personalized recommendation.
+
+    Tasks:
+    1. Score the collection (-1.0 to 1.0) on:
+    age (Classic→Modern), intensity (Beach→Intense), mood (Dystopian→Light), 
+    popularity (Esoteric→Well-known), focus (Plot→Character), realism (Down-to-earth→Imaginary)
+    2. Distill the essence of the bookshelf into exactly three meaningful words that reflect the owner's taste and identity.
+    3. Recommend a new book not on the shelf, and craft a short explanation addressed directly to the owner written in the second-person.
+      
+    Output your result as valid JSON.
+    
+    Here are the books you identified:
+"""
+
 class BookInfo(BaseModel):
     idx: int
     title: str
@@ -87,6 +105,19 @@ class BookshelfScores(BaseModel):
     popularity: float
     focus: float
     realism: float
+
+class BookshelfAnalysis(BaseModel):
+    age: float
+    intensity: float
+    mood: float
+    popularity: float
+    focus: float
+    realism: float
+    word_one: str
+    word_two: str
+    word_three: str
+    recommended_book: str
+    explanation: str
 
 def get_books_from_ocr(ocr_data):
     """
@@ -126,7 +157,7 @@ def get_books_from_ocr(ocr_data):
         return []
 
 
-def format_books_for_prompt(books: list[BookInfo]) -> str:
+def format_books_for_prompt(books: list[BookInfo], confidence_threshold: float) -> str:
     """
     Convert a list of BookInfo objects into a clean, readable string
     suitable for use inside an LLM prompt.
@@ -143,10 +174,11 @@ def format_books_for_prompt(books: list[BookInfo]) -> str:
 
     lines = ["Bookshelf: "]
     for book in books:
-        title = book.title.strip() or "Unknown Title"
-        author = book.author.strip() or "Unknown Author"
-        conf = f"{book.confidence:.2f}" if book.confidence is not None else "N/A"
-        lines.append(f"[{book.idx}] {title} — {author} (confidence {conf})")
+        if book.confidence > confidence_threshold:
+            title = book.title.strip() or "Unknown Title"
+            author = book.author.strip() or "Unknown Author"
+            conf = f"{book.confidence:.2f}" if book.confidence is not None else "N/A"
+            lines.append(f"[{book.idx}] {title} — {author} (confidence {conf})")
 
     return " // ".join(lines)
 
@@ -174,6 +206,9 @@ def analyse_bookshelf(books_string, mode):
     elif mode == 'scores':
         prompt = PROMPT_BOOKSHELF_SCORES + books_string
         response_schema = BookshelfScores
+    elif mode == 'analysis':
+        prompt = PROMPT_ANALYSE_SHELF + books_string
+        response_schema = BookshelfAnalysis
     else:
         raise ValueError("Invalid mode for analyse_bookshelf")
 

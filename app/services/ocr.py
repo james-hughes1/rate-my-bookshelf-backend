@@ -1,9 +1,29 @@
 import re
+import os
 import easyocr
 import numpy as np
 
+
+# Set cache directory for EasyOCR model weights
+CACHE_DIR = os.path.expanduser("~/.cache/easyocr")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Global reader instance (initialize once)
+_reader = None
+
+def init_easyocr():
+    """
+    Initialize EasyOCR reader and cache model weights.
+    Returns a singleton reader instance.
+    """
+    global _reader
+    if _reader is None:
+        _reader = easyocr.Reader(['en'], model_storage_directory=CACHE_DIR)
+    return _reader
+
+
 def easyocr_predict(crops, word_confidence_threshold=0.2):
-    reader = easyocr.Reader(['en'], gpu=True)
+    reader = init_easyocr()
     predictions = []
     for cp in crops:
         if cp.dtype != np.uint8:
