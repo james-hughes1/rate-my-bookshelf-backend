@@ -72,11 +72,11 @@ PROMPT_ANALYSE_SHELF = """
     Your goal is now to analyse this person's bookshelf and help them understand their reading tastes and preferences, and provide a personalized recommendation.
 
     Tasks:
-    1. Score the collection (-1.0 to 1.0) on:
-    age (Classic→Modern), intensity (Beach→Intense), mood (Dystopian→Light), 
-    popularity (Esoteric→Well-known), focus (Plot→Character), realism (Down-to-earth→Imaginary)
-    2. Distill the essence of the bookshelf into exactly three meaningful words that reflect the owner's taste and identity.
-    3. Recommend a new book not on the shelf, and craft a short explanation addressed directly to the owner written in the second-person.
+    1. Score the collection as a float between -1.0 to 1.0 on fields:
+    age (Old -1.0 → Modern +1.0), intensity (Beach Read -1.0 → Intense Study +1.0), mood (Dystopian -1.0 → Inspiring +1.0), 
+    popularity (Esoteric -1.0 → Well-known +1.0), focus (Plot -1.0 → Character +1.0), realism (Down-to-earth -1.0 → Imaginary +1.0).
+    2. Distill the essence of the bookshelf into exactly three meaningful words that reflect the owner's taste and identity. Avoid generic words; try to make them unique to the person and their collection.
+    3. Recommend a new book not on the shelf, and craft a short explanation addressed directly to the owner written in the second-person. Respond with fields recommended_book and explanation separately.
       
     Output your result as valid JSON.
     
