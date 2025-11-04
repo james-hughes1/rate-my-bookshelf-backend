@@ -32,7 +32,7 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     crops = segmenter.get_crops(segments)
 
     # Run OCR on crops
-    predictions = easyocr_predict([cp[0] for cp in crops])
+    predictions = easyocr_predict([cp[0] for cp in crops][:40])
 
     # Convert predictions to prompt
     prompt = ocr_text_prompt(predictions)
@@ -57,14 +57,14 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     word_one = analysis.word_one
     word_two = analysis.word_two
     word_three = analysis.word_three
-    book_recommendation = analysis.recommended_book
+    recommended_book = analysis.recommended_book
     explanation = analysis.explanation
 
     return JSONResponse(
         {
             "books": [b.dict() for b in books],
             "recommendation": {
-                "book": book_recommendation,
+                "recommended_book": recommended_book,
                 "explanation": explanation
             },
             "three_words": {
