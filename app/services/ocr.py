@@ -22,10 +22,10 @@ def init_easyocr():
     return _reader
 
 
-def easyocr_predict(crops, word_confidence_threshold=0.2):
+def easyocr_predict(crops, word_confidence_threshold=0.2, num_to_process=25):
     reader = init_easyocr()
     predictions = []
-    for cp in crops:
+    for cp in crops[:num_to_process]:
         if cp.dtype != np.uint8:
             cp = (cp * 255).astype(np.uint8)
 

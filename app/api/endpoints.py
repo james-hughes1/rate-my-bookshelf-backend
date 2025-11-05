@@ -32,7 +32,7 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     crops = segmenter.get_crops(segments)
 
     # Run OCR on crops
-    predictions = easyocr_predict([cp[0] for cp in crops][:40])
+    predictions = easyocr_predict([cp[0] for cp in crops])
 
     # Convert predictions to prompt
     prompt = ocr_text_prompt(predictions)
