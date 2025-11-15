@@ -22,7 +22,7 @@ def init_easyocr():
     return _reader
 
 
-def easyocr_predict(crops, word_confidence_threshold=0.2, num_to_process=25):
+def easyocr_predict(crops, word_confidence_threshold=0.2, num_to_process=25, num_rotations=2):
     reader = init_easyocr()
     predictions = []
     for cp in crops[:num_to_process]:
@@ -30,7 +30,7 @@ def easyocr_predict(crops, word_confidence_threshold=0.2, num_to_process=25):
             cp = (cp * 255).astype(np.uint8)
 
         # Run model on all 4 rotations
-        result = [reader.readtext(np.rot90(cp, k=idx)) for idx in range(2)]
+        result = [reader.readtext(np.rot90(cp, k=idx)) for idx in range(num_rotations)]
 
         img_predictions = []
 
@@ -63,7 +63,7 @@ def ocr_text_prompt(predictions):
     Returns:
         str: Formatted prompt for LLM.
     """
-    prompt = "The following are the OCR results for the image crops:\n"
+    prompt = ""
     for i, img_preds in enumerate(predictions):
         prompt += f" | Image Crop {i+1}:" + " ".join([pred['string'] for pred in img_preds]) + " | "
     return prompt

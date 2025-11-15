@@ -2,6 +2,17 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
+def read_image(image_path, max_dim):
+    image = cv2.imread(image_path)
+    if image.shape[2] == 3:
+        # Convert BGR → RGB if it looks like BGR (OpenCV default)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    h, w = image.shape[:2]
+    scale = min(max_dim / h, max_dim / w, 1.0)
+    if scale < 1.0:
+        image = cv2.resize(image, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+    return image
+
 class SimpleSegmenter:
     """
     A simple image segmenter that recursively splits an image into segments
@@ -29,19 +40,10 @@ class SimpleSegmenter:
         """
         Initialize the SimpleSegmenter with the given parameters.
         """
-        image = cv2.imread(image_path)
-        if image.shape[2] == 3:
-            # Convert BGR → RGB if it looks like BGR (OpenCV default)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h, w = image.shape[:2]
-        scale = min(max_dim / h, max_dim / w, 1.0)
-        if scale < 1.0:
-            image = cv2.resize(image, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
-
-        self.image = image
-        self.gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        self.image = read_image(image_path, max_dim=max_dim)
+        self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         if min_size is None:
-            self.min_size = min(image.shape[:2]) // 20
+            self.min_size = min(self.image.shape[:2]) // 20
         else:
             self.min_size = min_size
         self.center_penalty = center_penalty

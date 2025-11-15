@@ -67,7 +67,7 @@ PROMPT_BOOKSHELF_SCORES = """
 
 PROMPT_ANALYSE_SHELF = """
     You are an insightful and creative literary assistant.
-    You have already analyzed the list of scanned books on this person's bookshelf, including each title, author, and confidence score (which reflects how certain the identification from the image scan is).
+    Below you are provided with an OCR scan of somebody's bookshelf - it is up to you to identify potential titles and authors amongst noisy text found.
     
     Your goal is now to analyse this person's bookshelf and help them understand their reading tastes and preferences, and provide a personalized recommendation.
 

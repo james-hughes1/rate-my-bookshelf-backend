@@ -1,7 +1,7 @@
 import time
 from fastapi import APIRouter, UploadFile, File
 from fastapi.responses import JSONResponse
-from ..services.image_processing import SimpleSegmenter
+from ..services.image_processing import SimpleSegmenter, read_image
 from ..services.ocr import easyocr_predict, ocr_text_prompt
 from ..services.llm_client import get_books_from_ocr, format_books_for_prompt, analyse_bookshelf
 
@@ -25,29 +25,25 @@ async def upload_bookshelf(file: UploadFile = File(...)):
         f.write(await file.read())
 
     # Initialize segmenter and segment image
-    segmenter = SimpleSegmenter(image_path)
-    segments = segmenter.segment()
-
-    # Return cropped images
-    crops = segmenter.get_crops(segments)
+    image = read_image(image_path, max_dim=1024)
 
     # Run OCR on crops
-    predictions = easyocr_predict([cp[0] for cp in crops])
+    predictions = easyocr_predict([image], num_rotations=4)
 
     # Convert predictions to prompt
     prompt = ocr_text_prompt(predictions)
 
-    # Send prompt to LLM
-    books = get_books_from_ocr(prompt)
-    print("BOOKS DISCOVERED: \n", books)
-    time.sleep(5)
+    # # Send prompt to LLM
+    # books = get_books_from_ocr(prompt)
+    # print("BOOKS DISCOVERED: \n", books)
+    # time.sleep(5)
 
-    # Format books for prompt
-    formatted_books = format_books_for_prompt(books, confidence_threshold=0.5)
-    print("PROMPT: \n", formatted_books)
+    # # Format books for prompt
+    # formatted_books = format_books_for_prompt(books, confidence_threshold=0.5)
+    # print("PROMPT: \n", formatted_books)
 
     # Analyse the bookshelf
-    analysis = analyse_bookshelf(formatted_books, mode='analysis')
+    analysis = analyse_bookshelf(prompt, mode='analysis')
     age = analysis.age
     intensity = analysis.intensity
     mood = analysis.mood
@@ -62,7 +58,6 @@ async def upload_bookshelf(file: UploadFile = File(...)):
 
     return JSONResponse(
         {
-            "books": [b.dict() for b in books],
             "recommendation": {
                 "recommended_book": recommended_book,
                 "explanation": explanation
