@@ -68,7 +68,8 @@ PROMPT_BOOKSHELF_SCORES = """
 PROMPT_ANALYSE_SHELF = """
     You are an insightful and creative literary assistant.
     Below you are provided with an OCR scan of somebody's bookshelf - it is up to you to identify potential titles and authors amongst noisy text found.
-    
+    If you reference one of the books, be sure to format the title/author name nicely, as it may be messy in the scan.
+
     Your goal is now to analyse this person's bookshelf and help them understand their reading tastes and preferences, and provide a personalized recommendation.
 
     Tasks:
@@ -86,6 +87,7 @@ PROMPT_ANALYSE_SHELF = """
 PROMPT_LIBRARY_SHELF = """
     You are an insightful and creative literary assistant.
     Below you are provided with an OCR scan of a bookshelf someone is looking at - it is up to you to identify potential titles and authors amongst noisy text found.
+    If you reference one of the books, be sure to format the title/author name nicely, as it may be messy in the scan.
 
     You are also provided with a user's description of what sort of book/style they are looking for.
     
@@ -93,6 +95,7 @@ PROMPT_LIBRARY_SHELF = """
 
     Tasks:
     1. Recommend one of the books on the shelf, and craft a short explanation addressed directly to the owner written in the second-person.
+    Ensure you nicely format the title and/or author (if you have just the title and you know the author, feel free to add 'by ...')
     In some cases, you may want to point out in your explanation that while the recommended title was your best attempt, none of the books really match their tastes.
     In other cases, you may see multiple books that they would like, feel free to mention others in your explanation.
     Always choose one of the books, but your explanation should be whatever is appropriate to the specific situation.
@@ -263,7 +266,7 @@ def analyse_library(books_string, user_string):
         books_string: Book spines scanned
         user_string: User tastes info
     """
-    prompt = PROMPT_LIBRARY_SHELF + "BOOKS: " + books_string + "\nUSER INFO: "
+    prompt = PROMPT_LIBRARY_SHELF + "BOOKS: " + books_string + "\nUSER INFO: " + user_string
 
     try:
         response = client.models.generate_content(
