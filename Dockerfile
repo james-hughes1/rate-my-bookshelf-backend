@@ -1,5 +1,4 @@
 # syntax=docker/dockerfile:1
-
 FROM python:3.12.2-slim
 
 # -----------------------
@@ -8,15 +7,18 @@ FROM python:3.12.2-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     POETRY_VERSION=2.2.1 \
-    POETRY_VIRTUALENVS_CREATE=false
+    POETRY_VIRTUALENVS_CREATE=false \
+    APP_HOME=/app
 
 # -----------------------
-# Install system dependencies
+# System dependencies
 # -----------------------
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libgl1 \
-    libglib2.0-0 \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libgl1 \
+        libglib2.0-0 \
+        git \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------
@@ -28,26 +30,34 @@ RUN pip install "poetry==$POETRY_VERSION"
 # -----------------------
 # Set workdir
 # -----------------------
-WORKDIR /app
+WORKDIR $APP_HOME
 
 # -----------------------
-# Copy project files and install dependencies
+# Copy only pyproject.toml & poetry.lock to leverage Docker cache
 # -----------------------
 COPY pyproject.toml poetry.lock* ./
+
+# -----------------------
+# Install dependencies (no root)
+# -----------------------
 RUN poetry install --no-root --no-interaction --no-ansi
+
+# -----------------------
+# Copy project source
+# -----------------------
 COPY . .
 
 # -----------------------
-# Expose port
+# Preload RapidOCR model (cached in Docker layer)
+# -----------------------
+RUN python -c "from rapidocr_onnxruntime import RapidOCR; engine = RapidOCR()"
+
+# -----------------------
+# Expose FastAPI port
 # -----------------------
 EXPOSE 8080
 
 # -----------------------
-# Pre-download EasyOCR weights (during build)
-# -----------------------
-RUN python -c "from app.services.ocr import init_easyocr; init_easyocr()"
-
-# -----------------------
-# Run FastAPI via Poetry
+# Start server
 # -----------------------
 CMD ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
