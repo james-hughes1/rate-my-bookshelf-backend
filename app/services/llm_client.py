@@ -80,7 +80,7 @@ PROMPT_ANALYSE_SHELF = """
       
     Output your result as valid JSON.
     
-    Here are the books you identified:
+    Here are the books that were identified:
 """
 
 class BookInfo(BaseModel):

@@ -1,56 +1,78 @@
 import re
 import os
-import easyocr
+from rapidocr_onnxruntime import RapidOCR
 import numpy as np
+from PIL import Image
+import cv2
 
+engine = RapidOCR()
 
-# Set cache directory for EasyOCR model weights
-CACHE_DIR = os.path.expanduser("~/.cache/easyocr")
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-# Global reader instance (initialize once)
-_reader = None
-
-def init_easyocr():
+def ocr_from_array(image_array):
     """
-    Initialize EasyOCR reader and cache model weights.
-    Returns a singleton reader instance.
+    image_array: numpy array of shape (H, W, 3) or (H, W)
     """
-    global _reader
-    if _reader is None:
-        _reader = easyocr.Reader(['en'], model_storage_directory=CACHE_DIR)
-    return _reader
+    result, elapse = engine(image_array)
+    
+    if result is None:
+        return "No text detected"
+    
+    # Extract text from results
+    # result format: list of [bbox, text, confidence]
+    boxes = [line[0] for line in result]
+    texts = [line[1] for line in result]
+    confidences = [line[2] for line in result]
+    
+    return boxes, texts, confidences
 
 
-def easyocr_predict(crops, word_confidence_threshold=0.2, num_to_process=25, num_rotations=2):
-    reader = init_easyocr()
-    predictions = []
-    for cp in crops[:num_to_process]:
-        if cp.dtype != np.uint8:
-            cp = (cp * 255).astype(np.uint8)
+def assign_text_to_segments(img, spines, ocr_data):
+    """
+    Assign OCR text to spine segments.
 
-        # Run model on all 4 rotations
-        result = [reader.readtext(np.rot90(cp, k=idx)) for idx in range(num_rotations)]
+    Args:
+        img: Original image (H,W,3)
+        spines: list of 4-tuples [(x1,y1,x2,y2), ...]
+        ocr_data: [boxes, texts, confidences]
+                  boxes: list of list of 4 points [[ [x1,y1], ... ], ...]
+                  texts: list of strings
+                  confidences: list of floats
 
-        img_predictions = []
+    Returns:
+        segment_texts: list of tuples [(concatenated_string, [x1,y1,x2,y2]), ...]
+                       ordered by string length descending
+    """
+    ocr_boxes, ocr_texts, ocr_confs = ocr_data
+    segment_texts = []
 
-        # Extract titles
-        for rotate_result in result:
-            total_chars = 0
-            total_conf = 0
-            full_str = ""
-            for text_result in rotate_result:
-                conf = text_result[2]
-                text = text_result[1]
-                if conf > word_confidence_threshold:
-                    total_chars += len(text)
-                    total_conf += conf * len(text)
-                    full_str += (text.strip() + " ")
-            if (total_chars > 0) and re.search(r'[A-Za-z]', full_str):
-                img_predictions.append({"string": full_str, "confidence": total_conf/total_chars})
+    for x1, y1, x2, y2 in spines:
+        spine_texts = []
+        for box, text, conf in zip(ocr_boxes, ocr_texts, ocr_confs):
+            if conf <= 0:
+                continue
+            # Convert OCR box to bounding rect
+            xs = [pt[0] for pt in box]
+            ys = [pt[1] for pt in box]
+            ox1, oy1, ox2, oy2 = min(xs), min(ys), max(xs), max(ys)
 
-        predictions.append(img_predictions)
-    return predictions
+            # Check how much of OCR box is inside the spine
+            inter_x1 = max(x1, ox1)
+            inter_y1 = max(y1, oy1)
+            inter_x2 = min(x2, ox2)
+            inter_y2 = min(y2, oy2)
+            inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+            box_area = (ox2 - ox1) * (oy2 - oy1)
+
+            if box_area > 0 and inter_area / box_area >= 0.5:
+                # Consider this text part of the spine
+                spine_texts.append(text.strip())
+
+        if spine_texts:
+            combined_text = " ".join(spine_texts)
+            segment_texts.append((combined_text, [x1, y1, x2, y2]))
+
+    # Sort by string length descending
+    segment_texts.sort(key=lambda x: len(x[0]), reverse=True)
+    return segment_texts
 
 
 def ocr_text_prompt(predictions):
@@ -64,6 +86,6 @@ def ocr_text_prompt(predictions):
         str: Formatted prompt for LLM.
     """
     prompt = ""
-    for i, img_preds in enumerate(predictions):
-        prompt += f" | Image Crop {i+1}:" + " ".join([pred['string'] for pred in img_preds]) + " | "
+    for i, prediction_segment in enumerate(predictions):
+        prompt += f" | Spine {i}: " + prediction_segment[0] + " | "
     return prompt

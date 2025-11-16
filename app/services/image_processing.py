@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
+
 def read_image(image_path, max_dim):
     image = cv2.imread(image_path)
     if image.shape[2] == 3:
@@ -33,7 +34,7 @@ class SimpleSegmenter:
         visualize_segments(segments, max_show=10): Visualize the segments.
         get_crops(segments): Return cropped images and their confidence scores.
     """
-    def __init__(self, image_path, min_size=None,
+    def __init__(self, image_path, min_size_factor=None,
                  center_penalty=0.2, soft_aspect_threshold=3.0,
                  hard_aspect_threshold=5.0, score_threshold=0.2,
                  min_child_ratio=0.3, max_dim=1024):
@@ -42,10 +43,10 @@ class SimpleSegmenter:
         """
         self.image = read_image(image_path, max_dim=max_dim)
         self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-        if min_size is None:
+        if min_size_factor is None:
             self.min_size = min(self.image.shape[:2]) // 20
         else:
-            self.min_size = min_size
+            self.min_size = int(min(self.image.shape[:2]) * min_size_factor)
         self.center_penalty = center_penalty
         self.soft_aspect_threshold = soft_aspect_threshold
         self.hard_aspect_threshold = hard_aspect_threshold
@@ -231,3 +232,49 @@ class SimpleSegmenter:
             conf = self.segment_confidence.get(seg, 0)
             crops.append((crop, conf, seg))
         return crops
+
+
+def mean_value_spine_image(img, spines):
+    """
+    Produce a mean-valued version of the image based on spine bounding boxes.
+
+    Args:
+        img: Original image (H,W,3)
+        spines: list of 4-tuples [(x1,y1,x2,y2), ...]
+
+    Returns:
+        mean_img: Image where each spine segment is filled with its mean color
+    """
+    mean_img = img.copy()
+
+    for x1, y1, x2, y2 in spines:
+        seg = img[y1:y2, x1:x2]
+        mean_val = seg.mean(axis=(0,1)).astype(np.uint8)
+        mean_img[y1:y2, x1:x2] = mean_val
+
+    return mean_img
+
+
+def visualize_selected_segments(img, selected_segments, color = (255, 165, 0), thickness = 4, dash_length = 5):
+    """
+    Create mean-valued segmentation image and highlight selected segments.
+
+    Args:
+        img: Original image (H,W,3)
+        selected_segments: list of tuples [(string, [x1,y1,x2,y2]), ...]
+
+    Returns:
+        vis_img: mean-valued image with orange dashed boxes around selected segments
+    """
+    for string, (x1, y1, x2, y2) in selected_segments:
+        seg = img[y1:y2, x1:x2]
+
+        # Draw orange dashed box
+        for i in range(x1, x2, dash_length*2):
+            cv2.line(img, (i, y1), (min(i+dash_length, x2), y1), color, thickness)
+            cv2.line(img, (i, y2), (min(i+dash_length, x2), y2), color, thickness)
+        for i in range(y1, y2, dash_length*2):
+            cv2.line(img, (x1, i), (x1, min(i+dash_length, y2)), color, thickness)
+            cv2.line(img, (x2, i), (x2, min(i+dash_length, y2)), color, thickness)
+
+    return img
