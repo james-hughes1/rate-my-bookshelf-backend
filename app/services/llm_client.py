@@ -83,6 +83,27 @@ PROMPT_ANALYSE_SHELF = """
     Here are the books that were identified:
 """
 
+PROMPT_LIBRARY_SHELF = """
+    You are an insightful and creative literary assistant.
+    Below you are provided with an OCR scan of a bookshelf someone is looking at - it is up to you to identify potential titles and authors amongst noisy text found.
+
+    You are also provided with a user's description of what sort of book/style they are looking for.
+    
+    Your goal is now to analyse the bookshelf and provide a personalized recommendation.
+
+    Tasks:
+    1. Recommend one of the books on the shelf, and craft a short explanation addressed directly to the owner written in the second-person.
+    In some cases, you may want to point out in your explanation that while the recommended title was your best attempt, none of the books really match their tastes.
+    In other cases, you may see multiple books that they would like, feel free to mention others in your explanation.
+    Always choose one of the books, but your explanation should be whatever is appropriate to the specific situation.
+    Respond with fields recommended_book and explanation separately.
+    2. In the provided book spines below, each is given a number. Provide the number that matches your recommended book as recommended_idx
+      
+    Output your result as valid JSON.
+    
+    Here is the info:
+"""
+
 class BookInfo(BaseModel):
     idx: int
     title: str
@@ -118,6 +139,11 @@ class BookshelfAnalysis(BaseModel):
     word_three: str
     recommended_book: str
     explanation: str
+
+class LibraryAnalysis(BaseModel):
+    recommended_book: str
+    explanation: str
+    recommended_idx: int
 
 def get_books_from_ocr(ocr_data):
     """
@@ -219,6 +245,33 @@ def analyse_bookshelf(books_string, mode):
             config={
                 "response_mime_type": "application/json",
                 "response_schema": response_schema,
+            }
+        )
+
+        return response.parsed
+
+    except Exception as e:
+        print("Error calling Gemini API:", e)
+        return None
+
+
+def analyse_library(books_string, user_string):
+    """
+    Analyse the library shelf based on given tastes.
+    
+    Args:
+        books_string: Book spines scanned
+        user_string: User tastes info
+    """
+    prompt = PROMPT_LIBRARY_SHELF + "BOOKS: " + books_string + "\nUSER INFO: "
+
+    try:
+        response = client.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": LibraryAnalysis,
             }
         )
 
