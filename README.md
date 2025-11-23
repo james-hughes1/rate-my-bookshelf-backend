@@ -1,6 +1,5 @@
 <p align="left">
-  <img src="images/bookshelf3.png" height="300">
-  <img src="images/bookshelf3_segmented.png" height="300">
+  <img src="images/gifs/hough_segmentation.gif" height="300">
 </p>
 
 

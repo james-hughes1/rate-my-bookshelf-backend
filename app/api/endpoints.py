@@ -3,9 +3,11 @@ import json
 import cv2
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
-from ..services.image_processing import SimpleSegmenter, read_image, mean_value_spine_image, visualize_selected_segments
-from ..services.ocr import ocr_from_array, ocr_text_prompt, assign_text_to_segments
-from ..services.llm_client import get_books_from_ocr, format_books_for_prompt, analyse_bookshelf, analyse_library
+from ..services.image_processing import segment_rect, segment_hough, read_image, create_mean_value_image, visualize_selected_segment
+from ..services.ocr import (ocr_from_array, ocr_text_prompt, 
+                            assign_text_to_segments, mask_to_bbox)
+from ..services.llm_client import (get_books_from_ocr, format_books_for_prompt, 
+                                   analyse_bookshelf, analyse_library)
 
 router = APIRouter()
 
@@ -15,6 +17,7 @@ async def ping():
     Simple endpoint to test backend connectivity and CORS.
     """
     return {"status": "ok", "message": "Backend is reachable!"}
+
 
 @router.post("/mybookshelf")
 async def upload_bookshelf(file: UploadFile = File(...)):
@@ -32,16 +35,20 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     print("Running OCR...")
     boxes, text, confidences = ocr_from_array(img)
 
-    # Initialize segmenter and segment image
+    # Segment image (choose method - rect or hough)
     print("Segmenting image...")
-    segmenter = SimpleSegmenter(image_path, min_size_factor=0.05)
-    segments = segmenter.segment()
+    masks = segment_rect(
+        img,
+        min_size_factor=0.05,
+        verbose=False
+    )
+    # Alternative: masks = segment_hough(img, max_depth=8, verbose=False)
 
     # Group text by segments
     print("Assigning text to segments...")
     segment_texts = assign_text_to_segments(
         img,
-        segments,
+        masks,
         [boxes, text, confidences],
     )
 
@@ -108,16 +115,18 @@ async def upload_library(
     print("Running OCR...")
     boxes, text, confidences = ocr_from_array(img)
 
-    # Initialize segmenter and segment image
+    # Segment image
     print("Segmenting image...")
-    segmenter = SimpleSegmenter(image_path, min_size_factor=0.05)
-    segments = segmenter.segment()
+    masks = segment_hough(
+        img,
+        verbose=True
+    )
 
     # Group text by segments
     print("Assigning text to segments...")
     segment_texts = assign_text_to_segments(
         img,
-        segments,
+        masks,
         [boxes, text, confidences],
     )
 
@@ -130,7 +139,10 @@ async def upload_library(
     print("Asking AI to analyse...")
     library_analysis = analyse_library(segment_texts_prompt, description)
     recommended_idx = library_analysis.recommended_idx
-    chosen_segment = segment_texts[recommended_idx][1]
+    
+    # Get the mask index from segment_texts
+    _, chosen_segment = segment_texts[recommended_idx]
+    
     recommended_book = library_analysis.recommended_book
     explanation = library_analysis.explanation
     print(f"Recommended: {recommended_book}")
@@ -140,23 +152,21 @@ async def upload_library(
         {
             "recommended_book": recommended_book,
             "explanation": explanation,
-            "chosen_segment": chosen_segment,
-            "segments": segments
+            "chosen_segment": int(chosen_segment),
+            "num_segments": len(masks)
         }
     )
+
 
 @router.post("/highlight")
 async def highlight_segment(
     file: UploadFile = File(...),
-    segment: str = Form(...),   # segment arrives as a JSON string "[x1, y1, x2, y2]"
+    mask_idx: int = Form(...),
 ):
     """
-    Accept an image + a selected segment, return highlighted image.
+    Accept an image + a selected mask index, return highlighted image.
     """
-    # Parse segment JSON
-    chosen_segment = json.loads(segment)  # -> [x1, y1, x2, y2]
-    print(type(file))
-    print(chosen_segment)
+    print(f"Highlighting mask index: {mask_idx}")
 
     # Save uploaded image
     image_path = f"/tmp/{file.filename}"
@@ -165,21 +175,28 @@ async def highlight_segment(
 
     img = read_image(image_path, max_dim=1024)
 
-    # Recompute spines for correctness
-    segmenter = SimpleSegmenter(image_path, min_size_factor=0.05)
-    segments = segmenter.segment()
+    # Recompute masks for correctness
+    print("Re-segmenting image...")
+    masks = segment_hough(
+        img,
+        verbose=True
+    )
 
-    # Create flat spine image
-    img_spines = mean_value_spine_image(img, segments)
+    # Create visualization with highlighted segment
+    img_vis = visualize_selected_segment(
+        img, 
+        masks, 
+        mask_idx,
+        highlight_color=(255, 165, 0),  # Orange
+        thickness=4,
+        dash_length=5
+    )
 
-    # Highlight segment
-    img_vis = visualize_selected_segments(img_spines, [("", chosen_segment)])
-
-    # Ensure colours correct
-    img_rgb = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
+    # Convert RGB to BGR for OpenCV encoding
+    img_bgr = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
 
     # Encode as PNG
-    success, encoded_image = cv2.imencode('.png', img_rgb)
+    success, encoded_image = cv2.imencode('.png', img_bgr)
     if not success:
         raise RuntimeError("Failed to encode image")
 

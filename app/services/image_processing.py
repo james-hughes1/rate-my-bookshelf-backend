@@ -677,7 +677,8 @@ def _collect_masks_by_depth(image, mask=None, depth=0, method='rect', depth_mask
 
 def create_segmentation_gif(image, output_path='segmentation.gif', method='rect',
                             duration=300, final_duration=2000, loop=0,
-                            boundary_color=(255, 165, 0), thickness=2, **params):
+                            boundary_color=(255, 165, 0), thickness=2,
+                            highlight_idx=None, **params):
     """
     Create an animated GIF showing the segmentation process depth by depth.
     
@@ -758,7 +759,11 @@ def create_segmentation_gif(image, output_path='segmentation.gif', method='rect'
             break
     
     # Add final frame with mean values
-    final_frame = create_mean_value_image(image, all_masks_so_far)
+    if highlight_idx is None:
+        final_frame = create_mean_value_image(image, all_masks_so_far)
+    else:
+        final_frame = visualize_selected_segment(image, all_masks_so_far, highlight_idx)
+        
     gif_frames.append(final_frame)
     durations.append(final_duration)
     
@@ -949,3 +954,51 @@ def visualize_masks(image, masks, max_show=10):
     
     plt.tight_layout()
     plt.show()
+
+
+def visualize_selected_segment(image, masks, selected_mask_idx, 
+                               highlight_color=(255, 165, 0), thickness=4, 
+                               dash_length=5):
+    """
+    Create mean-valued segmentation image and highlight selected segment.
+
+    Args:
+        image: Original image (H,W,3)
+        masks: list of binary masks
+        selected_mask_idx: index of mask to highlight
+        highlight_color: RGB color for highlight
+        thickness: line thickness
+        dash_length: length of dashes in dashed line
+
+    Returns:
+        vis_img: mean-valued image with dashed box around selected segment
+    """
+    # Create mean value image
+    mean_img = create_mean_value_image(image, masks)
+    
+    # Get selected mask and its bounding box
+    if selected_mask_idx >= len(masks):
+        return mean_img
+    
+    selected_mask = masks[selected_mask_idx]
+    bbox = mask_to_bbox(selected_mask)
+    
+    if bbox is None:
+        return mean_img
+    
+    x1, y1, x2, y2 = bbox
+    
+    # Draw dashed box around selected segment
+    for i in range(x1, x2, dash_length * 2):
+        cv2.line(mean_img, (i, y1), (min(i + dash_length, x2), y1), 
+                highlight_color, thickness)
+        cv2.line(mean_img, (i, y2), (min(i + dash_length, x2), y2), 
+                highlight_color, thickness)
+    
+    for i in range(y1, y2, dash_length * 2):
+        cv2.line(mean_img, (x1, i), (x1, min(i + dash_length, y2)), 
+                highlight_color, thickness)
+        cv2.line(mean_img, (x2, i), (x2, min(i + dash_length, y2)), 
+                highlight_color, thickness)
+    
+    return mean_img

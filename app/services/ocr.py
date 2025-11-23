@@ -25,51 +25,69 @@ def ocr_from_array(image_array):
     return boxes, texts, confidences
 
 
-def assign_text_to_segments(img, spines, ocr_data):
+def mask_to_bbox(mask):
+    """Convert binary mask to bounding box (x1, y1, x2, y2)."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+
+
+def assign_text_to_segments(img, masks, ocr_data):
     """
-    Assign OCR text to spine segments.
+    Assign OCR text to mask segments.
 
     Args:
         img: Original image (H,W,3)
-        spines: list of 4-tuples [(x1,y1,x2,y2), ...]
+        masks: list of binary masks (H,W)
         ocr_data: [boxes, texts, confidences]
                   boxes: list of list of 4 points [[ [x1,y1], ... ], ...]
                   texts: list of strings
                   confidences: list of floats
 
     Returns:
-        segment_texts: list of tuples [(concatenated_string, [x1,y1,x2,y2]), ...]
+        segment_texts: list of tuples [(concatenated_string, mask_index), ...]
                        ordered by string length descending
     """
     ocr_boxes, ocr_texts, ocr_confs = ocr_data
     segment_texts = []
 
-    for x1, y1, x2, y2 in spines:
-        spine_texts = []
+    for mask_idx, mask in enumerate(masks):
+        # Get bounding box of mask for quick rejection
+        bbox = mask_to_bbox(mask)
+        if bbox is None:
+            continue
+        
+        x1, y1, x2, y2 = bbox
+        mask_texts = []
+        
         for box, text, conf in zip(ocr_boxes, ocr_texts, ocr_confs):
             if conf <= 0:
                 continue
+            
             # Convert OCR box to bounding rect
             xs = [pt[0] for pt in box]
             ys = [pt[1] for pt in box]
             ox1, oy1, ox2, oy2 = min(xs), min(ys), max(xs), max(ys)
-
-            # Check how much of OCR box is inside the spine
-            inter_x1 = max(x1, ox1)
-            inter_y1 = max(y1, oy1)
-            inter_x2 = min(x2, ox2)
-            inter_y2 = min(y2, oy2)
-            inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
-            box_area = (ox2 - ox1) * (oy2 - oy1)
-
-            if box_area > 0 and inter_area / box_area >= 0.5:
-                # Consider this text part of the spine
-                spine_texts.append(text.strip())
-
-        if spine_texts:
-            combined_text = " ".join(spine_texts)
-            segment_texts.append((combined_text, [x1, y1, x2, y2]))
-
+            
+            # Quick rejection test - check if OCR box overlaps with mask bbox
+            if ox2 < x1 or ox1 > x2 or oy2 < y1 or oy1 > y2:
+                continue
+            
+            # Get center point of OCR box
+            center_x = int((ox1 + ox2) / 2)
+            center_y = int((oy1 + oy2) / 2)
+            
+            # Check if center point is inside the mask
+            H, W = mask.shape
+            if 0 <= center_y < H and 0 <= center_x < W:
+                if mask[center_y, center_x] > 0:
+                    mask_texts.append(text.strip())
+        
+        if mask_texts:
+            combined_text = " ".join(mask_texts)
+            segment_texts.append((combined_text, mask_idx))
+    
     # Sort by string length descending
     segment_texts.sort(key=lambda x: len(x[0]), reverse=True)
     return segment_texts
@@ -80,12 +98,17 @@ def ocr_text_prompt(predictions):
     Create a prompt for LLM based on OCR predictions.
 
     Args:
-        predictions (List[List[dict]]): List of OCR results for each image crop.
+        predictions (List[Tuple[str, int]]): List of (text, mask_index) tuples.
 
     Returns:
         str: Formatted prompt for LLM.
     """
     prompt = ""
-    for i, prediction_segment in enumerate(predictions):
-        prompt += f" | Spine {i}: " + prediction_segment[0] + " | "
+    for i, (text, mask_idx) in enumerate(predictions):
+        prompt += f" | Spine {i}: {text} | "
     return prompt
+
+
+# ============================================================================
+# Visualization functions (moved from image_processing)
+# ============================================================================
