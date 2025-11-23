@@ -4,7 +4,7 @@ import os
 import cv2
 from math import log2
 import matplotlib.pyplot as plt
-
+from sklearn.metrics import adjusted_rand_score
 
 # -------------------------------------------------------------
 # Variation of Information (unchanged)
@@ -148,35 +148,52 @@ def evaluate_segmentation(eval_dir, segmentation_function):
         # ---- VI score ----
         vi = variation_of_information(mask_gt, mask_pred)
 
-        print(f"{filename}: VI = {vi:.4f}")
-        results.append((filename, vi))
+        # Compute ARI scores
+        ari = adjusted_rand_score(mask_gt.reshape(-1), mask_pred.reshape(-1))
+
+        print(f"{filename}: VI = {vi:.4f} | ARI = {ari:.4f}")
+        results.append((filename, vi, ari))
+    
+    vi_values = np.array([r[1] for r in results], dtype=float)
+    ari_values = np.array([r[2] for r in results], dtype=float)
+
+    vi_mean = vi_values.mean()
+    vi_std  = vi_values.std(ddof=1)     # sample std
+
+    ari_mean = ari_values.mean()
+    ari_std  = ari_values.std(ddof=1)
+
+    print("\n"+"-"*20+"\nFinal Results\n"+"-"*20)
+    print(f"VI:  {vi_mean:.4f} ± {vi_std:.4f}")
+    print(f"ARI: {ari_mean:.4f} ± {ari_std:.4f}")
+    return (vi_mean, vi_std), (ari_mean, ari_std)
 
     return results
 
 
-def visualize_mean_colours(img, binary_masks):
+def visualize_boundaries(img, binary_masks, thickness=2):
     """
     img: original image (H,W,3) in RGB or BGR
     binary_masks: array of shape (N,H,W) or list of (H,W) masks
-    Returns a visualisation image (H,W,3)
+    thickness: line thickness for boundaries
+    Returns a copy of the original image with segment boundaries overlaid
     """
     if isinstance(binary_masks, list):
         binary_masks = np.array(binary_masks)  # shape (N,H,W)
 
-    H, W = binary_masks.shape[1], binary_masks.shape[2]
-    vis = np.zeros_like(img, dtype=np.uint8)
+    vis = img.copy()
 
-    # Flatten image for faster indexing
-    img_flat = img.reshape(-1, 3)
+    # Generate random colors for each segment
+    rng = np.random.default_rng(seed=42)
+    colors = rng.integers(0, 255, size=(binary_masks.shape[0], 3))
 
     for i in range(binary_masks.shape[0]):
-        mask = binary_masks[i].astype(bool)
+        mask = binary_masks[i].astype(np.uint8)
         if np.any(mask):
-            # Compute mean color
-            mean_color = img[mask].mean(axis=0)
-            vis[mask] = mean_color.astype(np.uint8)
+            # Find contours
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(vis, contours, -1, color=tuple(int(c) for c in colors[i]), thickness=thickness)
 
-    # Background remains black (0,0,0)
     return vis
 
 
@@ -213,22 +230,26 @@ def compare_segmentations(eval_dir, segmentation_function1, segmentation_functio
     vi1 = variation_of_information(mask_gt_label, mask_pred1_label)
     vi2 = variation_of_information(mask_gt_label, mask_pred2_label)
 
-    print(f"Segmentation 1 VI: {vi1:.4f}")
-    print(f"Segmentation 2 VI: {vi2:.4f}")
+    # Compute ARI scores
+    ari1 = adjusted_rand_score(mask_gt_label.reshape(-1), mask_pred1_label.reshape(-1))
+    ari2 = adjusted_rand_score(mask_gt_label.reshape(-1), mask_pred2_label.reshape(-1))
+
+    print(f"Segmentation 1 VI: {vi1:.4f} | ARI: {ari1:.4f}")
+    print(f"Segmentation 2 VI: {vi2:.4f} | ARI: {ari2:.4f}")
 
     # Visualize using mean colours
-    vis1 = visualize_mean_colours(img, pred1_masks)
-    vis2 = visualize_mean_colours(img, pred2_masks)
+    vis1 = visualize_boundaries(img, pred1_masks)
+    vis2 = visualize_boundaries(img, pred2_masks)
 
     # Display side by side
     plt.figure(figsize=(12,6))
     plt.subplot(1,2,1)
     plt.imshow(vis1)
-    plt.title(f"Segmentation 1 (VI={vi1:.2f})")
+    plt.title(f"Segmentation 1 (VI={vi1:.2f} | ARI={ari1:.2f})")
     plt.axis("off")
 
     plt.subplot(1,2,2)
     plt.imshow(vis2)
-    plt.title(f"Segmentation 2 (VI={vi2:.2f})")
+    plt.title(f"Segmentation 2 (VI={vi2:.2f} | ARI={ari2:.2f})")
     plt.axis("off")
     plt.show()

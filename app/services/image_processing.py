@@ -4,498 +4,679 @@ import matplotlib.pyplot as plt
 
 
 def read_image(image_path, max_dim):
+    """Read and resize image."""
     image = cv2.imread(image_path)
     if image.shape[2] == 3:
-        # Convert BGR → RGB if it looks like BGR (OpenCV default)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     h, w = image.shape[:2]
     scale = min(max_dim / h, max_dim / w, 1.0)
     if scale < 1.0:
-        image = cv2.resize(image, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+        image = cv2.resize(image, (int(w*scale), int(h*scale)), 
+                          interpolation=cv2.INTER_AREA)
     return image
 
-class SimpleSegmenter:
-    """
-    A simple image segmenter that recursively splits an image into segments
 
-    Arguments:
-        image_path: Path to the input image.
-        min_size: Minimum size (in pixels) for a segment to be considered for splitting.
-        center_penalty: Penalty factor for splits near the center.
-        soft_aspect_threshold: Aspect ratio threshold for applying center penalty softly.
-        hard_aspect_threshold: Aspect ratio threshold beyond which splits are not allowed.
-        score_threshold: Minimum score required to accept a split.
-        min_child_ratio: Minimum ratio of child segment size to original image size to keep a segment.
-    
-    Methods:
-        segment(): Perform segmentation and return list of segments.
-        try_split(seg): Attempt to split a segment and return children if successful.
-        score_split(seg, pos, direction, center_penalty): Score a potential split.
-        visualize_segments(segments, max_show=10): Visualize the segments.
-        get_crops(segments): Return cropped images and their confidence scores.
-    """
-    def __init__(self, min_size_factor=None,
-                 center_penalty=0.2, soft_aspect_threshold=3.0,
-                 hard_aspect_threshold=5.0, score_threshold=0.2,
-                 min_child_ratio=0.3):
-        """
-        Initialize the SimpleSegmenter with the given parameters.
-        """
-        self.min_size_factor = min_size_factor
-        self.center_penalty = center_penalty
-        self.soft_aspect_threshold = soft_aspect_threshold
-        self.hard_aspect_threshold = hard_aspect_threshold
-        self.score_threshold = score_threshold
-        self.min_child_ratio = min_child_ratio
+# ============================================================================
+# Helper Functions
+# ============================================================================
 
-        # Confidence dictionary
-        self.segment_confidence = {}
-
-    def load(self, image, max_dim=1024):
-        h, w = image.shape[:2]
-        scale = min(max_dim / h, max_dim / w, 1.0)
-        if scale < 1.0:
-            image = cv2.resize(image, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
-        self.image = image
-        self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-        if self.min_size_factor is None:
-            self.min_size = min(self.image.shape[:2]) // 20
-        else:
-            self.min_size = int(min(self.image.shape[:2]) * self.min_size_factor)
-
-    def segment(self):
-        """
-        Perform segmentation on the image and return list of segments.
-        Each segment is represented as (x1, y1, x2, y2).
-
-        Returns:
-            List of segments.
-        """
-        h, w = self.image.shape[:2]
-        segments = [(0, 0, w, h)]
-        self.segment_confidence[(0, 0, w, h)] = 1.0
-
-        changed = True
-        while changed:
-            changed = False
-            new_segments = []
-
-            for seg in segments:
-                split_result = self.try_split(seg)
-                if split_result:
-                    children, confidence = split_result
-                    for child in children:
-                        child_w = child[2] - child[0]
-                        child_h = child[3] - child[1]
-                        # only include if above min_child_ratio threshold
-                        if (child_w >= w * self.min_child_ratio or
-                            child_h >= h * self.min_child_ratio):
-                            self.segment_confidence[child] = confidence
-                    new_segments.extend(children)
-                    changed = True
-                else:
-                    new_segments.append(seg)
-
-            segments = new_segments
-            print(f"Now have {len(segments)} segments")
-
-        # Sort leaves by area
-        sorted_segments = sorted(
-            segments,
-            key=lambda s: (s[2] - s[0]) * (s[3] - s[1]),
-            reverse=True
-        )
-
-        print(f"\nFound {len(sorted_segments)} leaf segments.")
-        return sorted_segments
-
-    def try_split(self, seg):
-        """
-        Attempt to split a segment; return children and score if successful.
-
-        Args:
-            seg: (x1, y1, x2, y2) defining the segment
-
-        Returns:
-            (children, score) if split is successful, else None
-        """
-        x1, y1, x2, y2 = seg
-        width, height = x2 - x1, y2 - y1
-
-        if width < self.min_size * 2 or height < self.min_size * 2:
-            return None
-        if max(width / height, height / width) > self.hard_aspect_threshold:
-            return None
-
-        best_split = None
-        best_score = self.score_threshold
-
-        # Vertical
-        if width >= self.min_size * 2:
-            for x in range(x1 + self.min_size, x2 - self.min_size, 5):
-                score = self.score_split(seg, x, 'vertical', self.center_penalty)
-                if score > best_score:
-                    best_score = score
-                    best_split = ('vertical', x)
-
-        # Horizontal
-        if height >= self.min_size * 2:
-            for y in range(y1 + self.min_size, y2 - self.min_size, 5):
-                score = self.score_split(seg, y, 'horizontal', self.center_penalty)
-                if score > best_score:
-                    best_score = score
-                    best_split = ('horizontal', y)
-
-        if best_split:
-            direction, pos = best_split
-            if direction == 'vertical':
-                children = [(x1, y1, pos, y2), (pos, y1, x2, y2)]
-            else:
-                children = [(x1, y1, x2, pos), (x1, pos, x2, y2)]
-            return children, best_score
-
+def compute_mask_bbox(mask, pad=0):
+    """Get bounding box of mask with optional padding."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
         return None
+    H, W = mask.shape
+    y1 = max(int(ys.min()) - pad, 0)
+    y2 = min(int(ys.max()) + pad, H - 1)
+    x1 = max(int(xs.min()) - pad, 0)
+    x2 = min(int(xs.max()) + pad, W - 1)
+    return (x1, y1, x2, y2)
 
-    def score_split(self, seg, pos, direction, center_penalty):
-        """
-        Score a potential split at position `pos` in `direction` for segment `seg`.
 
-        Args:
-            seg: (x1, y1, x2, y2) defining the segment
-            pos: Position to split
-            direction: 'vertical' or 'horizontal'
-            center_penalty: Penalty factor for center splits
+def mask_to_bbox(mask):
+    """Convert mask to simple axis-aligned bounding box (x1, y1, x2, y2)."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
 
-        Returns:
-            float: Score of the split
-        """
-        x1, y1, x2, y2 = seg
-        band_width = 3
-        width = x2 - x1
-        height = y2 - y1
 
-        if direction == 'vertical':
-            split_band = self.gray[y1:y2, max(x1, pos - band_width):min(x2, pos + band_width)]
-            grad = cv2.Sobel(split_band, cv2.CV_64F, 1, 0, ksize=3)
-            total_len = x2 - x1
-            rel_pos = (pos - x1) / total_len
-            cuts_shorter_side = width < height
+def get_rotated_aspect_ratio(mask):
+    """Get aspect ratio of minimum area rotated bounding box."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return np.inf
+    pts = np.column_stack((xs, ys)).astype(np.float32)
+    rect = cv2.minAreaRect(pts)
+    w, h = rect[1]
+    if w == 0 or h == 0:
+        return np.inf
+    return max(w / h, h / w)
 
-            # Edge score
-            edge_score = np.sum(np.abs(grad)) / ((y2 - y1)**2)
+
+def get_longest_bbox_side(mask):
+    """Get longest side of minimum area rotated bounding box."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return 0
+    pts = np.column_stack((xs, ys)).astype(np.float32)
+    rect = cv2.minAreaRect(pts)
+    w, h = rect[1]
+    return max(w, h)
+
+
+# ============================================================================
+# Splitting Methods
+# ============================================================================
+
+def score_rect_split(image_gray, seg_bbox, pos, direction, center_penalty, 
+                     soft_aspect_threshold):
+    """Score a rectangular split using Sobel edge detection with penalties."""
+    x1, y1, x2, y2 = seg_bbox
+    band_width = 3
+    width = x2 - x1
+    height = y2 - y1
+    
+    if direction == 'vertical':
+        x_start = max(x1, pos - band_width)
+        x_end = min(x2, pos + band_width)
+        band = image_gray[y1:y2, x_start:x_end]
+        grad = cv2.Sobel(band, cv2.CV_64F, 1, 0, ksize=3)
+        edge_score = np.sum(np.abs(grad)) / ((y2 - y1) ** 2)
+        
+        total_len = x2 - x1
+        rel_pos = (pos - x1) / total_len
+        cuts_shorter_side = width < height
+    else:  # horizontal
+        y_start = max(y1, pos - band_width)
+        y_end = min(y2, pos + band_width)
+        band = image_gray[y_start:y_end, x1:x2]
+        grad = cv2.Sobel(band, cv2.CV_64F, 0, 1, ksize=3)
+        edge_score = np.sum(np.abs(grad)) / ((x2 - x1) ** 2)
+        
+        total_len = y2 - y1
+        rel_pos = (pos - y1) / total_len
+        cuts_shorter_side = height < width
+    
+    # Center penalty
+    if cuts_shorter_side and max(width / height, height / width) > soft_aspect_threshold:
+        penalty = 1.0
+    else:
+        dist_from_center = abs(rel_pos - 0.5) * 2
+        penalty = (dist_from_center ** (1 + center_penalty))
+    
+    return penalty * edge_score
+
+
+def find_best_rect_split(image_gray, seg_bbox, min_size, score_threshold, 
+                         center_penalty, soft_aspect_threshold, hard_aspect_threshold):
+    """Find best rectangular split for a bounding box."""
+    x1, y1, x2, y2 = seg_bbox
+    w, h = x2 - x1, y2 - y1
+    
+    if w < min_size * 2 and h < min_size * 2:
+        return None
+    
+    # Check hard aspect ratio threshold
+    if max(w / h, h / w) > hard_aspect_threshold:
+        return None
+    
+    best_score = score_threshold
+    best_split = None
+    
+    # Try vertical splits
+    if w >= min_size * 2:
+        for x in range(x1 + min_size, x2 - min_size, 5):
+            score = score_rect_split(image_gray, seg_bbox, x, 'vertical',
+                                    center_penalty, soft_aspect_threshold)
+            if score > best_score:
+                best_score = score
+                best_split = ('vertical', x)
+    
+    # Try horizontal splits
+    if h >= min_size * 2:
+        for y in range(y1 + min_size, y2 - min_size, 5):
+            score = score_rect_split(image_gray, seg_bbox, y, 'horizontal',
+                                    center_penalty, soft_aspect_threshold)
+            if score > best_score:
+                best_score = score
+                best_split = ('horizontal', y)
+    
+    return best_split
+
+
+def split_rect_mask(mask, split_info):
+    """Split a mask based on rectangular split."""
+    direction, pos = split_info
+    H, W = mask.shape
+    
+    if direction == 'vertical':
+        child1 = mask.copy()
+        child2 = mask.copy()
+        child1[:, pos:] = 0
+        child2[:, :pos] = 0
+    else:  # horizontal
+        child1 = mask.copy()
+        child2 = mask.copy()
+        child1[pos:, :] = 0
+        child2[:pos, :] = 0
+    
+    return child1, child2
+
+
+def extend_line_to_boundary(x1, y1, x2, y2, width, height):
+    """Extend a line segment to image boundaries."""
+    dx, dy = x2 - x1, y2 - y1
+    length = np.hypot(dx, dy)
+    if length == 0:
+        return x1, y1, x2, y2
+    
+    dx /= length
+    dy /= length
+    
+    # Find all boundary intersections
+    ts = []
+    for X in [0, width - 1]:
+        if dx != 0:
+            t = (X - x1) / dx
+            Y = y1 + t * dy
+            if 0 <= Y < height:
+                ts.append(t)
+    for Y in [0, height - 1]:
+        if dy != 0:
+            t = (Y - y1) / dy
+            X = x1 + t * dx
+            if 0 <= X < width:
+                ts.append(t)
+    
+    if len(ts) < 2:
+        return x1, y1, x2, y2
+    
+    tmin, tmax = min(ts), max(ts)
+    xA = x1 + tmin * dx
+    yA = y1 + tmin * dy
+    xB = x1 + tmax * dx
+    yB = y1 + tmax * dy
+    
+    return int(xA), int(yA), int(xB), int(yB)
+
+
+def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score, 
+                          depth, ignore_min_score, min_pixels, min_side_fraction,
+                          max_aspect_ratio):
+    """Find best Hough line split for a mask."""
+    H, W = image_bgr.shape[:2]
+    bbox = compute_mask_bbox(mask, pad)
+    if bbox is None:
+        return None
+    
+    x1, y1, x2, y2 = bbox
+    crop = image_bgr[y1:y2+1, x1:x2+1]
+    crop_mask = mask[y1:y2+1, x1:x2+1].astype(np.uint8)
+    Hc, Wc = crop_mask.shape
+    
+    # Compute parent variation
+    parent_pixels = crop[crop_mask > 0]
+    parent_variation = parent_pixels.std() if parent_pixels.size > 0 else 0
+    
+    # Edge detection + Hough
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    raw_lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180,
+                                threshold=40, minLineLength=0, maxLineGap=10)
+    
+    if raw_lines is None:
+        return None
+    
+    # Score lines by detection fraction
+    lines = []
+    for (xa, ya, xb, yb) in raw_lines[:, 0]:
+        dx, dy = xb - xa, yb - ya
+        detected_len = np.hypot(dx, dy)
+        if detected_len == 0:
+            continue
+        
+        # Extend to boundaries
+        xA, yA, xB, yB = extend_line_to_boundary(xa, ya, xb, yb, Wc, Hc)
+        super_len = np.hypot(xB - xA, yB - yA)
+        
+        if super_len > 0:
+            frac = detected_len / super_len
+            # Convert to full image coordinates
+            lines.append((frac, (xA + x1, yA + y1, xB + x1, yB + y1)))
+    
+    lines.sort(key=lambda x: x[0], reverse=True)
+    top_lines = lines[:n_hough_lines]
+    
+    # Find best split by variation drop
+    best_split = None
+    best_score = 0
+    
+    xs_full, ys_full = np.meshgrid(np.arange(W), np.arange(H))
+    
+    for frac, (x1_line, y1_line, x2_line, y2_line) in top_lines:
+        # Split mask by line
+        lv = ((y2_line - y1_line) * (xs_full - x1_line) - 
+              (x2_line - x1_line) * (ys_full - y1_line))
+        child1 = mask.copy()
+        child2 = mask.copy()
+        child1[(lv < 0) | (mask == 0)] = 0
+        child2[(lv >= 0) | (mask == 0)] = 0
+        
+        # --- Validate children immediately (like original) ---
+        sum1, sum2 = child1.sum(), child2.sum()
+        if sum1 < min_pixels or sum2 < min_pixels:
+            continue
+        
+        # Check child bounding box sizes
+        longest1 = get_longest_bbox_side(child1)
+        longest2 = get_longest_bbox_side(child2)
+        if (longest1 / min(H, W) < min_side_fraction or 
+            longest2 / min(H, W) < min_side_fraction):
+            continue
+        
+        # Check child aspect ratios
+        if (get_rotated_aspect_ratio(child1) > max_aspect_ratio or 
+            get_rotated_aspect_ratio(child2) > max_aspect_ratio):
+            continue
+        
+        # --- Compute variation drop ---
+        pixels1 = image_bgr[child1 > 0]
+        pixels2 = image_bgr[child2 > 0]
+        var1 = pixels1.std() if pixels1.size > 0 else 1e6
+        var2 = pixels2.std() if pixels2.size > 0 else 1e6
+        min_child_var = min(var1, var2)
+        
+        if parent_variation > 0:
+            variation_drop = (parent_variation - min_child_var) / parent_variation
         else:
-            split_band = self.gray[max(y1, pos - band_width):min(y2, pos + band_width), x1:x2]
-            grad = cv2.Sobel(split_band, cv2.CV_64F, 0, 1, ksize=3)
-            total_len = y2 - y1
-            rel_pos = (pos - y1) / total_len
-            cuts_shorter_side = height < width
-
-            # Edge score
-            edge_score = np.sum(np.abs(grad)) / ((x2 - x1)**2)
-
-        # Center penalty
-        if cuts_shorter_side and max(width / height, height / width) > self.soft_aspect_threshold:
-            penalty = 1.0
-        else:
-            dist_from_center = abs(rel_pos - 0.5) * 2
-            penalty = (dist_from_center ** (1 + center_penalty))
-
-        return penalty * edge_score
-
-    def visualize_segments(self, segments, max_show=10):
-        """
-        Visualize the segments on the image.
-
-        Args:
-            segments: List of segments to visualize.
-            max_show: Maximum number of segments to show.
-        """
-        n = min(len(segments), max_show)
-        plt.figure(figsize=(12, 3 * n))
-        for i, seg in enumerate(segments[:n]):
-            x1, y1, x2, y2 = seg
-            crop = self.image[y1:y2, x1:x2]
-            plt.subplot(n, 1, i + 1)
-            plt.imshow(crop)
-            plt.title(f"Segment {i+1} | Confidence = {self.segment_confidence.get(seg, 0):.3f}")
-            plt.axis('off')
-        plt.tight_layout()
-        plt.show()
-
-    def get_crops(self, segments):
-        """
-        Return cropped images and their confidence scores.
-
-        Args:
-            segments: List of segments to crop.
-
-        Returns:
-            List of tuples (crop, confidence, (x1, y1, x2, y2)).
-        """
-        crops = []
-        for seg in segments:
-            x1, y1, x2, y2 = seg
-            crop = self.image[y1:y2, x1:x2].copy()
-            conf = self.segment_confidence.get(seg, 0)
-            crops.append((crop, conf, seg))
-        return crops
+            variation_drop = 0
+        
+        # Orientation score (prefer axis-aligned)
+        dx = x2_line - x1_line
+        dy = y2_line - y1_line
+        angle_folded = np.arctan2(dy, dx) % (np.pi / 2)
+        orientation_score = 1 - np.sin(2 * angle_folded)
+        
+        overall_score = variation_drop * (orientation_score ** 2)
+        
+        if overall_score > best_score:
+            if overall_score >= min_score or depth < ignore_min_score:
+                best_score = overall_score
+                best_split = (child1, child2, overall_score)
+    
+    return best_split
 
 
-def mean_value_spine_image(img, spines):
+# ============================================================================
+# Main Recursive Segmentation Function
+# ============================================================================
+
+def recursive_segment(image, mask=None, depth=0, method='rect', debug=False, 
+                     verbose=False, _split_count=[0], **params):
     """
-    Produce a mean-valued version of the image based on spine bounding boxes.
-
-    Args:
-        img: Original image (H,W,3)
-        spines: list of 4-tuples [(x1,y1,x2,y2), ...]
-
-    Returns:
-        mean_img: Image where each spine segment is filled with its mean color
-    """
-    mean_img = img.copy()
-
-    for x1, y1, x2, y2 in spines:
-        seg = img[y1:y2, x1:x2]
-        mean_val = seg.mean(axis=(0,1)).astype(np.uint8)
-        mean_img[y1:y2, x1:x2] = mean_val
-
-    return mean_img
-
-
-def visualize_selected_segments(img, selected_segments, color = (255, 165, 0), thickness = 4, dash_length = 5):
-    """
-    Create mean-valued segmentation image and highlight selected segments.
-
-    Args:
-        img: Original image (H,W,3)
-        selected_segments: list of tuples [(string, [x1,y1,x2,y2]), ...]
-
-    Returns:
-        vis_img: mean-valued image with orange dashed boxes around selected segments
-    """
-    for string, (x1, y1, x2, y2) in selected_segments:
-        seg = img[y1:y2, x1:x2]
-
-        # Draw orange dashed box
-        for i in range(x1, x2, dash_length*2):
-            cv2.line(img, (i, y1), (min(i+dash_length, x2), y1), color, thickness)
-            cv2.line(img, (i, y2), (min(i+dash_length, x2), y2), color, thickness)
-        for i in range(y1, y2, dash_length*2):
-            cv2.line(img, (x1, i), (x1, min(i+dash_length, y2)), color, thickness)
-            cv2.line(img, (x2, i), (x2, min(i+dash_length, y2)), color, thickness)
-
-    return img
-
-
-def thd_split_mask_variation(img_bgr, mask=None, depth=0, max_depth=6,
-                             min_pixels=200, min_side_fraction=0.2, pad=5,
-                             min_child_ratio=0.05, min_score=0.2,
-                             n_hough_lines=5, lines_so_far=None,
-                             max_aspect_ratio=10,
-                             blur=True, blur_ksize=(7,7), blur_sigma=3, ignore_min_score=1):
-    """
-    Recursive tree-based segmentation using Hough lines scored by variation drop,
-    with max_aspect_ratio filter using rotated bounding rectangles, and
-    stopping condition that prevents creation of too-small segments.
-
-    Parameters
-    ----------
-    img_bgr : np.ndarray
-        Original image (HxWx3, BGR)
-    mask : np.ndarray
-        Current mask to split (HxW)
+    Recursively segment an image using either rectangular or Hough line splits.
+    
+    Parameters:
+    -----------
+    image : ndarray
+        Input image (RGB or BGR)
+    mask : ndarray, optional
+        Binary mask defining current region (None = whole image)
     depth : int
         Current recursion depth
+    method : str
+        'rect' for rectangular Sobel splits, 'hough' for Hough line splits
+    debug : bool
+        Print debug information about rejections
+    verbose : bool
+        Print information each time a split is made
+    **params : dict
+        Method-specific parameters
+        
+    Returns:
+    --------
+    masks : list of ndarray
+        List of binary masks for leaf segments
+    """
+    H, W = image.shape[:2]
+    
+    # Initialize mask if None
+    if mask is None:
+        mask = np.ones((H, W), dtype=np.uint8)
+        _split_count[0] = 0  # Reset counter at root
+    
+    # Common stopping conditions
+    max_depth = params.get('max_depth', 10)
+    min_pixels = params.get('min_pixels', 200)
+    
+    if depth >= max_depth:
+        if debug:
+            print(f"Depth {depth}: Stopping - max depth reached")
+        return [mask]
+    
+    if mask.sum() < min_pixels:
+        if debug:
+            print(f"Depth {depth}: Stopping - too few pixels ({mask.sum()} < {min_pixels})")
+        return []
+    
+    # Method-specific validation and splitting
+    if method == 'rect':
+        # Rectangular split method
+        min_size_factor = params.get('min_size_factor', None)
+        min_size = params.get('min_size', None)
+        score_threshold = params.get('score_threshold', 0.2)
+        center_penalty = params.get('center_penalty', 0.2)
+        soft_aspect_threshold = params.get('soft_aspect_threshold', 3.0)
+        hard_aspect_threshold = params.get('hard_aspect_threshold', 5.0)
+        min_child_ratio = params.get('min_child_ratio', 0.3)
+        
+        # Compute min_size if not provided
+        if min_size is None:
+            if min_size_factor is None:
+                min_size = min(H, W) // 20
+            else:
+                min_size = int(min(H, W) * min_size_factor)
+        
+        # Get bounding box
+        seg_bbox = mask_to_bbox(mask)
+        if seg_bbox is None:
+            return []
+        
+        # Convert to grayscale if needed
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image
+        
+        # Find best split
+        split_info = find_best_rect_split(gray, seg_bbox, min_size, score_threshold,
+                                         center_penalty, soft_aspect_threshold,
+                                         hard_aspect_threshold)
+        
+        if split_info is None:
+            return [mask]
+        
+        # Get score from split_info
+        direction, pos = split_info
+        best_score = score_rect_split(gray, seg_bbox, pos, direction,
+                                      center_penalty, soft_aspect_threshold)
+        
+        # Split mask
+        child1, child2 = split_rect_mask(mask, split_info)
+        
+        # Increment split counter and print if verbose
+        if verbose:
+            _split_count[0] += 1
+            direction, pos = split_info
+            print(f"Depth {depth} | Split {_split_count[0]}: "
+                  f"score={best_score:.3f}, direction={direction}, pos={pos}, "
+                  f"child ratios={child1.sum()/mask.sum():.2f}, "
+                  f"{child2.sum()/mask.sum():.2f}")
+        
+        # Check min_child_ratio
+        child1_w = (mask_to_bbox(child1)[2] - mask_to_bbox(child1)[0]) if mask_to_bbox(child1) else 0
+        child1_h = (mask_to_bbox(child1)[3] - mask_to_bbox(child1)[1]) if mask_to_bbox(child1) else 0
+        child2_w = (mask_to_bbox(child2)[2] - mask_to_bbox(child2)[0]) if mask_to_bbox(child2) else 0
+        child2_h = (mask_to_bbox(child2)[3] - mask_to_bbox(child2)[1]) if mask_to_bbox(child2) else 0
+        
+        if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
+                (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
+            return [mask]
+        
+    elif method == 'hough':
+        # Hough line split method
+        min_side_fraction = params.get('min_side_fraction', 0.3)
+        max_aspect_ratio = params.get('max_aspect_ratio', 10)
+        pad = params.get('pad', 5)
+        n_hough_lines = params.get('n_hough_lines', 10)
+        min_score = params.get('min_score', 0.01)
+        ignore_min_score = params.get('ignore_min_score', 20)
+        min_child_ratio = params.get('min_child_ratio', 0.2)
+        debug = params.get('debug', False)
+        
+        # Check size constraints on parent
+        longest_side = get_longest_bbox_side(mask)
+        if longest_side / min(H, W) < min_side_fraction:
+            if debug:
+                print(f"Depth {depth}: Stopping - bbox too small "
+                      f"({longest_side}/{min(H,W)} < {min_side_fraction})")
+            return []
+        
+        # Check aspect ratio on parent
+        aspect = get_rotated_aspect_ratio(mask)
+        if aspect > max_aspect_ratio:
+            if debug:
+                print(f"Depth {depth}: Stopping - aspect ratio too high ({aspect:.2f} > {max_aspect_ratio})")
+            return []
+        
+        # Find best split (child validation happens inside)
+        split_result = find_best_hough_split(
+            image, mask, pad, n_hough_lines, min_score, depth, ignore_min_score,
+            min_pixels, min_side_fraction, max_aspect_ratio
+        )
+        
+        if split_result is None:
+            if debug:
+                print(f"Depth {depth}: No valid split found")
+            return [mask]
+        
+        child1, child2, score = split_result
+        
+        # Increment split counter and print if verbose
+        if verbose:
+            _split_count[0] += 1
+            print(f"Depth {depth} | Split {_split_count[0]}: "
+                  f"score={score:.3f}, "
+                  f"child pixels={child1.sum()}, {child2.sum()}, "
+                  f"child ratios={child1.sum()/mask.sum():.2f}, "
+                  f"{child2.sum()/mask.sum():.2f}")
+        
+        if debug:
+            print(f"Depth {depth}: score={score:.3f}, "
+                  f"child pixels={child1.sum()}, {child2.sum()}, "
+                  f"child ratios={child1.sum()/mask.sum():.2f}, "
+                  f"{child2.sum()/mask.sum():.2f}")
+    
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    
+    # Validate children before recursing
+    if child1.sum() < min_pixels or child2.sum() < min_pixels:
+        if method == 'hough' and params.get('debug', False):
+            print(f"Depth {depth}: Rejecting split - children too small "
+                  f"({child1.sum()}, {child2.sum()} < {min_pixels})")
+        return [mask]
+    
+    # Additional validation for rectangular method only
+    # (Hough already validates children during split finding)
+    if method == 'rect':
+        # Check min_child_ratio for rect method
+        child1_bbox = mask_to_bbox(child1)
+        child2_bbox = mask_to_bbox(child2)
+        if child1_bbox and child2_bbox:
+            child1_w = child1_bbox[2] - child1_bbox[0]
+            child1_h = child1_bbox[3] - child1_bbox[1]
+            child2_w = child2_bbox[2] - child2_bbox[0]
+            child2_h = child2_bbox[3] - child2_bbox[1]
+            
+            min_child_ratio = params.get('min_child_ratio', 0.3)
+            if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
+                    (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
+                return [mask]
+    
+    # Recurse on children
+    masks1 = recursive_segment(image, child1, depth + 1, method, debug, verbose, 
+                               _split_count, **params)
+    masks2 = recursive_segment(image, child2, depth + 1, method, debug, verbose,
+                               _split_count, **params)
+    
+    return masks1 + masks2
+
+
+# ============================================================================
+# Convenience Functions
+# ============================================================================
+
+def segment_rect(image, min_size_factor=None, min_size=None, 
+                 center_penalty=0.2, soft_aspect_threshold=3.0,
+                 hard_aspect_threshold=5.0, score_threshold=0.2,
+                 min_child_ratio=0.3, max_depth=10, min_pixels=200,
+                 verbose=False):
+    """
+    Segment image using rectangular Sobel-based splits.
+    
+    Parameters:
+    -----------
+    image : ndarray
+        Input image
+    min_size_factor : float, optional
+        Minimum size as fraction of image dimension
+    min_size : int, optional
+        Minimum size in pixels (overrides min_size_factor if provided)
+    center_penalty : float
+        Penalty factor for splits near center
+    soft_aspect_threshold : float
+        Aspect ratio threshold for applying center penalty softly
+    hard_aspect_threshold : float
+        Aspect ratio beyond which splits are not allowed
+    score_threshold : float
+        Minimum score required to accept a split
+    min_child_ratio : float
+        Minimum ratio of child segment size to original image size
     max_depth : int
         Maximum recursion depth
     min_pixels : int
-        Minimum mask pixels to continue splitting / create segment
+        Minimum pixels in a segment
+    verbose : bool
+        Print info each time a split is made
+    
+    Returns:
+    --------
+    masks : list of binary masks
+    """
+    params = {
+        'min_size_factor': min_size_factor,
+        'min_size': min_size,
+        'center_penalty': center_penalty,
+        'soft_aspect_threshold': soft_aspect_threshold,
+        'hard_aspect_threshold': hard_aspect_threshold,
+        'score_threshold': score_threshold,
+        'min_child_ratio': min_child_ratio,
+        'max_depth': max_depth,
+        'min_pixels': min_pixels
+    }
+    
+    masks = recursive_segment(image, method='rect', verbose=verbose, **params)
+    print(f"\nTotal segments: {len(masks)}")
+    return masks
+
+
+def segment_hough(image, max_depth=8, min_pixels=None, min_side_fraction=0.3,
+                  pad=5, min_child_ratio=0.2, min_score=0.01, 
+                  n_hough_lines=10, max_aspect_ratio=10,
+                  blur=True, blur_ksize=(7, 7), blur_sigma=3, 
+                  ignore_min_score=5, debug=False, verbose=False):
+    """
+    Segment image using Hough line splits with variation scoring.
+    
+    Parameters:
+    -----------
+    image : ndarray
+        Input image
+    max_depth : int
+        Maximum recursion depth
+    min_pixels : int, optional
+        Minimum pixels in a segment (default: 1% of image area)
     min_side_fraction : float
-        Minimum fraction of the shortest image side that the longest bounding box side must have
+        Minimum fraction of shortest image side for bbox longest side
     pad : int
-        Pixels to pad around bounding box when cropping (for Hough line detection)
+        Padding around bounding box for Hough detection
     min_child_ratio : float
-        Minimum fraction of parent pixels each child must have
+        Minimum ratio of child to parent pixels
     min_score : float
         Minimum score to accept a split
     n_hough_lines : int
-        Number of top candidate lines by superline fraction to score
-    lines_so_far : list
-        Recorded split lines
+        Number of top candidate lines to score
     max_aspect_ratio : float
-        Maximum allowed aspect ratio of rotated bounding box
+        Maximum allowed aspect ratio of rotated bbox
     blur : bool
-        Whether to apply Gaussian blur at top level
+        Whether to apply Gaussian blur
     blur_ksize : tuple
         Gaussian blur kernel size
     blur_sigma : float
         Gaussian blur sigma
-    """
-    if lines_so_far is None:
-        lines_so_far = []
-
-    if depth == 0 and blur:
-        img_bgr = cv2.GaussianBlur(img_bgr, blur_ksize, blur_sigma)
+    ignore_min_score : int
+        Number of initial splits to accept regardless of min_score
+    debug : bool
+        Print debug information about why splits are rejected
+    verbose : bool
+        Print info each time a split is made
     
-    H, W = img_bgr.shape[:2]
+    Returns:
+    --------
+    masks : list of binary masks
+    """
 
-    if mask is None:
-        mask = np.ones((H,W), dtype=np.uint8)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    l = clahe.apply(l)
+    lab = cv2.merge([l, a, b])
+    image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-    # --- Reject mask immediately if too small ---
-    if mask.sum() < min_pixels:
-        return [], lines_so_far
+    if blur:
+        image = cv2.GaussianBlur(image, blur_ksize, blur_sigma)
+    
+    # Default min_pixels to 1% of image area
+    if min_pixels is None:
+        min_pixels = int(image.shape[0] * image.shape[1] * 0.01)
+    
+    params = {
+        'max_depth': max_depth,
+        'min_pixels': min_pixels,
+        'min_side_fraction': min_side_fraction,
+        'pad': pad,
+        'min_child_ratio': min_child_ratio,
+        'min_score': min_score,
+        'n_hough_lines': n_hough_lines,
+        'max_aspect_ratio': max_aspect_ratio,
+        'ignore_min_score': ignore_min_score,
+        'debug': debug
+    }
+    
+    masks = recursive_segment(image, method='hough', verbose=verbose, **params)
+    print(f"\nTotal segments: {len(masks)}")
+    return masks
 
-    # Reject mask if bounding box longest side is too small
-    ys, xs = np.nonzero(mask)
-    pts = np.column_stack((xs, ys)).astype(np.float32)
-    rect = cv2.minAreaRect(pts)
-    box_w, box_h = rect[1]
-    if box_w == 0 or box_h == 0:
-        return [], lines_so_far
-    longest_side = max(box_w, box_h)
-    if longest_side / min(H, W) < min_side_fraction:
-        return [], lines_so_far
 
-    if depth >= max_depth:
-        return [mask], lines_so_far
+# ============================================================================
+# Visualization
+# ============================================================================
 
-    # --- Crop bounding box for Hough line detection ---
-    y1, y2 = max(int(ys.min()) - pad, 0), min(int(ys.max()) + pad, H-1)
-    x1, x2 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + pad, W-1)
-    crop = img_bgr[y1:y2+1, x1:x2+1]
-    crop_mask = mask[y1:y2+1, x1:x2+1].astype(np.uint8)
-    Hc, Wc = crop_mask.shape
-
-    parent_pixels = crop[crop_mask > 0]
-    parent_variation = parent_pixels.std() if parent_pixels.size > 0 else 0
-
-    # --- Edge detection + Hough ---
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-
-    raw_lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180,
-                                threshold=40, minLineLength=0, maxLineGap=10)
-    if raw_lines is None:
-        return [mask], lines_so_far
-
-    # --- Compute superline fraction ---
-    def compute_fraction_line_crop(xa, ya, xb, yb, absolute=False):
-        dx, dy = xb - xa, yb - ya
-        detected_len = np.hypot(dx, dy)
-        if detected_len == 0: return 0, (xa, ya, xb, yb)
-        dx /= detected_len; dy /= detected_len
-        ts = []
-        for X in [0, Wc-1]:
-            if dx != 0:
-                t = (X - xa)/dx
-                Y = ya + t*dy
-                if 0 <= Y < Hc: ts.append(t)
-        for Y in [0, Hc-1]:
-            if dy != 0:
-                t = (Y - ya)/dy
-                X = xa + t*dx
-                if 0 <= X < Wc: ts.append(t)
-        if len(ts) < 2: return 0, (xa, ya, xb, yb)
-        tmin, tmax = min(ts), max(ts)
-        xA, yA = xa + tmin*dx, ya + tmin*dy
-        xB, yB = xa + tmax*dx, ya + tmax*dy
-        super_len = np.hypot(xB-xA, yB-yA)
-        if super_len == 0: return 0, (xa, ya, xb, yb)
-        if not absolute:
-            return detected_len / super_len, (xA, yA, xB, yB)
-        else:
-            return detected_len, (xA, yA, xB, yB)
-
-    # --- Top candidate lines ---
-    lines = []
-    for (xa, ya, xb, yb) in raw_lines[:,0]:
-        frac, (xA, yA, xB, yB) = compute_fraction_line_crop(xa, ya, xb, yb, absolute=False)
-        lines.append((frac, (int(xA)+x1, int(yA)+y1, int(xB)+x1, int(yB)+y1)))
-    lines.sort(key=lambda x: x[0], reverse=True)
-    top_lines = lines[:n_hough_lines]
-
-    best_split = None
-    best_score = 0
-
-    xs_full, ys_full = np.meshgrid(np.arange(W), np.arange(H))
-    for frac, (x1_line, y1_line, x2_line, y2_line) in top_lines:
-        lv = (y2_line - y1_line)*(xs_full - x1_line) - (x2_line - x1_line)*(ys_full - y1_line)
-        child1 = mask.copy(); child2 = mask.copy()
-        child1[(lv < 0) | (mask==0)] = 0
-        child2[(lv >= 0) | (mask==0)] = 0
-
-        # --- Reject children immediately if too small ---
-        sum1, sum2 = child1.sum(), child2.sum()
-        if sum1 < min_pixels or sum2 < min_pixels:
+def visualize_masks(image, masks, max_show=10):
+    """Visualize segmentation masks."""
+    n = min(len(masks), max_show)
+    fig, axes = plt.subplots(n, 2, figsize=(10, 3 * n))
+    if n == 1:
+        axes = axes.reshape(1, -1)
+    
+    for i, mask in enumerate(masks[:n]):
+        bbox = mask_to_bbox(mask)
+        if bbox is None:
             continue
-
-        # Reject children if bounding box longest side too small
-        def child_ok(m):
-            ys, xs = np.nonzero(m)
-            if len(xs) == 0: return False
-            rect = cv2.minAreaRect(np.column_stack((xs, ys)).astype(np.float32))
-            w, h = rect[1]
-            return max(w,h)/min(H,W) >= min_side_fraction
-        if not child_ok(child1) or not child_ok(child2):
-            continue
-
-        # --- Max aspect ratio check ---
-        def max_rotated_aspect_ratio(m):
-            ys, xs = np.nonzero(m)
-            if len(xs) == 0: return np.inf
-            rect = cv2.minAreaRect(np.column_stack((xs, ys)).astype(np.float32))
-            w, h = rect[1]
-            if w == 0 or h == 0: return np.inf
-            return max(w/h, h/w)
-        if max_rotated_aspect_ratio(child1) > max_aspect_ratio or max_rotated_aspect_ratio(child2) > max_aspect_ratio:
-            continue
-
-        # --- Compute variation drop ---
-        pixels1 = img_bgr[child1>0]; pixels2 = img_bgr[child2>0]
-        var1 = pixels1.std() if pixels1.size>0 else 1e6
-        var2 = pixels2.std() if pixels2.size>0 else 1e6
-        min_child_var = min(var1, var2)
-        variation_drop = (parent_variation - min_child_var)/parent_variation if parent_variation>0 else 0
-
-        # --- Orientation score ---
-        dx = x2_line - x1_line; dy = y2_line - y1_line
-        angle_folded = np.arctan2(dy, dx) % (np.pi/2)
-        orientation_score = (1 - np.sin(2 * angle_folded))
-        overall_score = variation_drop * (orientation_score**2)
-
-        if overall_score > best_score and (overall_score >= min_score or len(lines_so_far) < ignore_min_score):
-            best_score = overall_score
-            best_split = (x1_line, y1_line, x2_line, y2_line, child1, child2)
-
-    if best_split is None:
-        return [mask], lines_so_far
-
-    x1_line, y1_line, x2_line, y2_line, child1, child2 = best_split
-    lines_so_far.append((x1_line, y1_line, x2_line, y2_line))
-    print(f"Depth {depth} | Segments {len(lines_so_far)}: best score={best_score:.3f}, "
-          f"child ratios={child1.sum()/mask.sum():.2f}, {child2.sum()/mask.sum():.2f}")
-
-    leaves1, lines_so_far = thd_split_mask_variation(img_bgr, child1, depth+1, max_depth,
-                                                     min_pixels=min_pixels,
-                                                     min_side_fraction=min_side_fraction,
-                                                     pad=pad, min_child_ratio=min_child_ratio,
-                                                     min_score=min_score,
-                                                     n_hough_lines=n_hough_lines,
-                                                     lines_so_far=lines_so_far,
-                                                     max_aspect_ratio=max_aspect_ratio,
-                                                     ignore_min_score=ignore_min_score)
-    leaves2, lines_so_far = thd_split_mask_variation(img_bgr, child2, depth+1, max_depth,
-                                                     min_pixels=min_pixels,
-                                                     min_side_fraction=min_side_fraction,
-                                                     pad=pad, min_child_ratio=min_child_ratio,
-                                                     min_score=min_score,
-                                                     n_hough_lines=n_hough_lines,
-                                                     lines_so_far=lines_so_far,
-                                                     max_aspect_ratio=max_aspect_ratio,
-                                                     ignore_min_score=ignore_min_score)
-
-    all_leaves = [m for m in leaves1 + leaves2 if m.sum() > 0]
-    if depth == 0:
-        print(f"Total non-empty segments: {len(all_leaves)}")
-    return all_leaves, lines_so_far
+        x1, y1, x2, y2 = bbox
+        
+        # Show mask
+        axes[i, 0].imshow(mask, cmap='gray')
+        axes[i, 0].set_title(f'Mask {i+1} ({mask.sum()} pixels)')
+        axes[i, 0].axis('off')
+        
+        # Show cropped region
+        crop = image[y1:y2, x1:x2]
+        axes[i, 1].imshow(crop)
+        axes[i, 1].set_title(f'Crop {i+1}')
+        axes[i, 1].axis('off')
+    
+    plt.tight_layout()
+    plt.show()
