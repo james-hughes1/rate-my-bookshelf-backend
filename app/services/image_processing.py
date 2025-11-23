@@ -678,7 +678,7 @@ def _collect_masks_by_depth(image, mask=None, depth=0, method='rect', depth_mask
 def create_segmentation_gif(image, output_path='segmentation.gif', method='rect',
                             duration=300, final_duration=2000, loop=0,
                             boundary_color=(255, 165, 0), thickness=2,
-                            highlight_idx=None, **params):
+                            highlight_idx=None, io_buffer=None, **params):
     """
     Create an animated GIF showing the segmentation process depth by depth.
     
@@ -700,6 +700,10 @@ def create_segmentation_gif(image, output_path='segmentation.gif', method='rect'
         RGB color for segment boundaries
     thickness : int
         Line thickness for boundaries
+    highlight_idx : int
+        Index of segment to highlight (default None)
+    io_buffer : io.BytesIO() object
+        To enable sending via FastAPI
     **params : dict
         Segmentation parameters (same as segment_rect or segment_hough)
     
@@ -778,13 +782,23 @@ def create_segmentation_gif(image, output_path='segmentation.gif', method='rect'
     
     # Save as GIF with varying durations
     if len(pil_frames) > 0:
-        pil_frames[0].save(
-            output_path,
-            save_all=True,
-            append_images=pil_frames[1:],
-            duration=durations,
-            loop=loop
-        )
+        if output_path is not None:
+            pil_frames[0].save(
+                output_path,
+                save_all=True,
+                append_images=pil_frames[1:],
+                duration=durations,
+                loop=loop
+            )
+        elif io_buffer is not None:
+            pil_frames[0].save(
+                io_buffer,
+                format="GIF",
+                save_all=True,
+                append_images=pil_frames[1:],
+                duration=durations,
+                loop=loop
+            )
         print(f"\nGIF saved to {output_path} ({len(pil_frames)} frames)")
     
     print(f"Total leaf segments: {len(final_masks)}")

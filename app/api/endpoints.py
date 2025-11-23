@@ -3,11 +3,13 @@ import json
 import cv2
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
-from ..services.image_processing import segment_rect, segment_hough, read_image, create_mean_value_image, visualize_selected_segment
+from ..services.image_processing import segment_rect, segment_hough, read_image, create_mean_value_image, visualize_selected_segment, create_segmentation_gif
 from ..services.ocr import (ocr_from_array, ocr_text_prompt, 
                             assign_text_to_segments, mask_to_bbox)
 from ..services.llm_client import (get_books_from_ocr, format_books_for_prompt, 
                                    analyse_bookshelf, analyse_library)
+import io
+from PIL import Image
 
 router = APIRouter()
 
@@ -182,22 +184,27 @@ async def highlight_segment(
         verbose=True
     )
 
-    # Create visualization with highlighted segment
-    img_vis = visualize_selected_segment(
+    # Create GIF in memory
+    gif_bytes = io.BytesIO()
+
+    masks_rect_gif = create_segmentation_gif(
         img, 
-        masks, 
-        mask_idx,
-        highlight_color=(255, 165, 0),  # Orange
-        thickness=4,
-        dash_length=5
+        output_path=None,
+        method='hough',
+        duration=300,  # 300ms per intermediate frame
+        final_duration=2000,  # 2 seconds for final frame
+        boundary_color=(255, 165, 0),  # Orange boundaries
+        thickness=2,
+        min_size_factor=None,
+        score_threshold=0.2,
+        verbose=True,
+        highlight_idx=mask_idx,
+        io_buffer=gif_bytes
     )
 
-    # Convert RGB to BGR for OpenCV encoding
-    img_bgr = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
+    gif_bytes.seek(0)
 
-    # Encode as PNG
-    success, encoded_image = cv2.imencode('.png', img_bgr)
-    if not success:
-        raise RuntimeError("Failed to encode image")
-
-    return Response(content=encoded_image.tobytes(), media_type="image/png")
+    return Response(
+        content=gif_bytes.read(),
+        media_type="image/gif"
+    )
