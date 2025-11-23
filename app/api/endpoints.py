@@ -1,15 +1,16 @@
 import time
 import json
 import cv2
+import io
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
-from ..services.image_processing import segment_rect, segment_hough, read_image, create_mean_value_image, visualize_selected_segment, create_segmentation_gif
+from ..services.image_processing import (segment_hough, read_image,
+                                         SegmentationResult, create_segmentation_gif)
 from ..services.ocr import (ocr_from_array, ocr_text_prompt, 
-                            assign_text_to_segments, mask_to_bbox)
+                            assign_text_to_segments, mask_to_bbox,
+                            create_mean_value_image, visualize_selected_segment)
 from ..services.llm_client import (get_books_from_ocr, format_books_for_prompt, 
                                    analyse_bookshelf, analyse_library)
-import io
-from PIL import Image
 
 router = APIRouter()
 
@@ -37,62 +38,49 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     print("Running OCR...")
     boxes, text, confidences = ocr_from_array(img)
 
-    # Segment image (choose method - rect or hough)
+    # Segment image (returns SegmentationResult with tree data)
     print("Segmenting image...")
-    masks = segment_rect(
-        img,
-        min_size_factor=0.05,
-        verbose=False
-    )
-    # Alternative: masks = segment_hough(img, max_depth=8, verbose=False)
+    seg_result = segment_hough(img, return_tree=True, verbose=True)
+    
+    # Save segmentation result for later GIF generation
+    seg_result.save(f"/tmp/{file.filename}_segmentation.pkl")
 
     # Group text by segments
     print("Assigning text to segments...")
     segment_texts = assign_text_to_segments(
         img,
-        masks,
+        seg_result.masks,  # Use masks from result
         [boxes, text, confidences],
+        verbose=True
     )
 
     # Format text
     print("Formatting segmented text...")
     segment_texts_prompt = ocr_text_prompt(segment_texts)
-
     print(segment_texts_prompt)
     
     # Analyse the bookshelf
     print("Asking AI to analyse...")
     analysis = analyse_bookshelf(segment_texts_prompt, mode='analysis')
-    age = analysis.age
-    intensity = analysis.intensity
-    mood = analysis.mood
-    popularity = analysis.popularity
-    focus = analysis.focus
-    realism = analysis.realism
-    word_one = analysis.word_one
-    word_two = analysis.word_two
-    word_three = analysis.word_three
-    recommended_book = analysis.recommended_book
-    explanation = analysis.explanation
-
+    
     return JSONResponse(
         {
             "recommendation": {
-                "recommended_book": recommended_book,
-                "explanation": explanation
+                "recommended_book": analysis.recommended_book,
+                "explanation": analysis.explanation
             },
             "three_words": {
-                "word_one": word_one,
-                "word_two": word_two,
-                "word_three": word_three
+                "word_one": analysis.word_one,
+                "word_two": analysis.word_two,
+                "word_three": analysis.word_three
             },
             "scores": {
-                "age": age,
-                "intensity": intensity,
-                "mood": mood,
-                "popularity": popularity,
-                "focus": focus,
-                "realism": realism
+                "age": analysis.age,
+                "intensity": analysis.intensity,
+                "mood": analysis.mood,
+                "popularity": analysis.popularity,
+                "focus": analysis.focus,
+                "realism": analysis.realism
             }
         }
     )
@@ -117,18 +105,18 @@ async def upload_library(
     print("Running OCR...")
     boxes, text, confidences = ocr_from_array(img)
 
-    # Segment image
+    # Segment image (returns SegmentationResult with tree data)
     print("Segmenting image...")
-    masks = segment_hough(
-        img,
-        verbose=True
-    )
+    seg_result = segment_hough(img, return_tree=True, verbose=True)
+    
+    # Save segmentation result for later GIF generation
+    seg_result.save(f"/tmp/{file.filename}_segmentation.pkl")
 
     # Group text by segments
     print("Assigning text to segments...")
     segment_texts = assign_text_to_segments(
         img,
-        masks,
+        seg_result.masks,
         [boxes, text, confidences],
     )
 
@@ -143,7 +131,10 @@ async def upload_library(
     recommended_idx = library_analysis.recommended_idx
     
     # Get the mask index from segment_texts
-    _, chosen_segment = segment_texts[recommended_idx]
+    _, chosen_mask_idx = segment_texts[recommended_idx]
+    
+    # Convert mask to bbox for JSON serialization
+    chosen_bbox = mask_to_bbox(seg_result.masks[chosen_mask_idx])
     
     recommended_book = library_analysis.recommended_book
     explanation = library_analysis.explanation
@@ -154,8 +145,7 @@ async def upload_library(
         {
             "recommended_book": recommended_book,
             "explanation": explanation,
-            "chosen_segment": int(chosen_segment),
-            "num_segments": len(masks)
+            "chosen_mask_idx": int(chosen_mask_idx)
         }
     )
 
@@ -166,45 +156,87 @@ async def highlight_segment(
     mask_idx: int = Form(...),
 ):
     """
-    Accept an image + a selected mask index, return highlighted image.
+    Accept an image + a selected mask index, return highlighted image as PNG.
     """
     print(f"Highlighting mask index: {mask_idx}")
 
-    # Save uploaded image
+    # Load the image
     image_path = f"/tmp/{file.filename}"
     with open(image_path, "wb") as f:
         f.write(await file.read())
-
+    
     img = read_image(image_path, max_dim=1024)
 
-    # Recompute masks for correctness
-    print("Re-segmenting image...")
-    masks = segment_hough(
-        img,
-        verbose=True
+    # Load saved segmentation result (no re-segmentation!)
+    try:
+        seg_result = SegmentationResult.load(f"/tmp/{file.filename}_segmentation.pkl")
+    except FileNotFoundError:
+        # Fallback: re-segment if pkl not found
+        print("Warning: Segmentation result not found, re-segmenting...")
+        seg_result = segment_hough(img, return_tree=True, verbose=True)
+
+    # Create visualization with highlighted segment
+    img_vis = visualize_selected_segment(
+        img, 
+        seg_result.masks, 
+        mask_idx,
+        highlight_color=(255, 165, 0),
+        thickness=4,
+        dash_length=5
     )
+
+    # Convert RGB to BGR for OpenCV encoding
+    img_bgr = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
+
+    # Encode as PNG
+    success, encoded_image = cv2.imencode('.png', img_bgr)
+    if not success:
+        raise RuntimeError("Failed to encode image")
+
+    return Response(content=encoded_image.tobytes(), media_type="image/png")
+
+
+@router.post("/gif")
+async def create_gif(
+    file: UploadFile = File(...),
+    mask_idx: int = Form(None),  # Optional: highlight specific segment
+):
+    """
+    Create an animated GIF showing the segmentation process.
+    Uses saved segmentation result - no re-segmentation needed!
+    """
+    print(f"Creating GIF, highlight mask: {mask_idx}")
+
+    # Load the image
+    image_path = f"/tmp/{file.filename}"
+    with open(image_path, "wb") as f:
+        f.write(await file.read())
+    
+    img = read_image(image_path, max_dim=1024)
+
+    # Load saved segmentation result
+    try:
+        seg_result = SegmentationResult.load(f"/tmp/{file.filename}_segmentation.pkl")
+    except FileNotFoundError:
+        return JSONResponse(
+            {"error": "Segmentation result not found. Please upload and segment first."},
+            status_code=404
+        )
 
     # Create GIF in memory
-    gif_bytes = io.BytesIO()
-
-    masks_rect_gif = create_segmentation_gif(
-        img, 
+    gif_buffer = io.BytesIO()
+    create_segmentation_gif(
+        img,
+        seg_result,
         output_path=None,
-        method='hough',
-        duration=300,  # 300ms per intermediate frame
-        final_duration=2000,  # 2 seconds for final frame
-        boundary_color=(255, 165, 0),  # Orange boundaries
+        io_buffer=gif_buffer,
+        duration=300,
+        final_duration=2000,
+        boundary_color=(255, 165, 0),
         thickness=2,
-        min_size_factor=None,
-        score_threshold=0.2,
-        verbose=True,
-        highlight_idx=mask_idx,
-        io_buffer=gif_bytes
+        highlight_idx=mask_idx
     )
-
-    gif_bytes.seek(0)
-
-    return Response(
-        content=gif_bytes.read(),
-        media_type="image/gif"
-    )
+    
+    gif_buffer.seek(0)
+    
+    return Response(content=gif_buffer.getvalue(), media_type="image/gif")

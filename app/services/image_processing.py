@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import io
+import pickle
 
 
 def read_image(image_path, max_dim):
@@ -265,7 +266,7 @@ def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score,
         child1[(lv < 0) | (mask == 0)] = 0
         child2[(lv >= 0) | (mask == 0)] = 0
         
-        # --- Validate children immediately (like original) ---
+        # Validate children immediately
         sum1, sum2 = child1.sum(), child2.sum()
         if sum1 < min_pixels or sum2 < min_pixels:
             continue
@@ -282,7 +283,7 @@ def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score,
             get_rotated_aspect_ratio(child2) > max_aspect_ratio):
             continue
         
-        # --- Compute variation drop ---
+        # Compute variation drop
         pixels1 = image_bgr[child1 > 0]
         pixels2 = image_bgr[child2 > 0]
         var1 = pixels1.std() if pixels1.size > 0 else 1e6
@@ -315,7 +316,7 @@ def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score,
 # ============================================================================
 
 def recursive_segment(image, mask=None, depth=0, method='rect', 
-                     verbose=False, _split_count=[0], **params):
+                     verbose=False, _split_count=[0], _depth_masks=None, **params):
     """
     Recursively segment an image using either rectangular or Hough line splits.
     
@@ -331,6 +332,8 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         'rect' for rectangular Sobel splits, 'hough' for Hough line splits
     verbose : bool
         Print information each time a split is made
+    _depth_masks : dict, optional
+        Internal parameter for collecting masks by depth (for GIF generation)
     **params : dict
         Method-specific parameters
         
@@ -340,14 +343,22 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         List of binary masks for leaf segments
     """
     H, W = image.shape[:2]
+    max_depth = params.get('max_depth', 10)
     
-    # Initialize mask if None
+    # Initialize mask and depth tracking if at root
     if mask is None:
         mask = np.ones((H, W), dtype=np.uint8)
-        _split_count[0] = 0  # Reset counter at root
+        _split_count[0] = 0
+        if _depth_masks is not None:
+            _depth_masks.clear()
+            for d in range(max_depth + 1):
+                _depth_masks[d] = []
+    
+    # Record mask at current depth
+    if _depth_masks is not None:
+        _depth_masks[depth].append(mask.copy())
     
     # Common stopping conditions
-    max_depth = params.get('max_depth', 10)
     min_pixels = params.get('min_pixels', 200)
     
     if depth >= max_depth:
@@ -358,7 +369,6 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
     
     # Method-specific validation and splitting
     if method == 'rect':
-        # Rectangular split method
         min_size_factor = params.get('min_size_factor', None)
         min_size = params.get('min_size', None)
         score_threshold = params.get('score_threshold', 0.2)
@@ -374,7 +384,6 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
             else:
                 min_size = int(min(H, W) * min_size_factor)
         
-        # Get bounding box
         seg_bbox = mask_to_bbox(mask)
         if seg_bbox is None:
             return []
@@ -385,7 +394,6 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         else:
             gray = image
         
-        # Find best split
         split_info = find_best_rect_split(gray, seg_bbox, min_size, score_threshold,
                                          center_penalty, soft_aspect_threshold,
                                          hard_aspect_threshold)
@@ -393,7 +401,7 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         if split_info is None:
             return [mask]
         
-        # Get score from split_info
+        # Get score
         direction, pos = split_info
         best_score = score_rect_split(gray, seg_bbox, pos, direction,
                                       center_penalty, soft_aspect_threshold)
@@ -401,34 +409,34 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         # Split mask
         child1, child2 = split_rect_mask(mask, split_info)
         
-        # Increment split counter and print if verbose
+        # Print verbose info
         if verbose:
             _split_count[0] += 1
-            direction, pos = split_info
             print(f"Depth {depth} | Split {_split_count[0]}: "
                   f"score={best_score:.3f}, direction={direction}, pos={pos}, "
                   f"child ratios={child1.sum()/mask.sum():.2f}, "
                   f"{child2.sum()/mask.sum():.2f}")
         
         # Check min_child_ratio
-        child1_w = (mask_to_bbox(child1)[2] - mask_to_bbox(child1)[0]) if mask_to_bbox(child1) else 0
-        child1_h = (mask_to_bbox(child1)[3] - mask_to_bbox(child1)[1]) if mask_to_bbox(child1) else 0
-        child2_w = (mask_to_bbox(child2)[2] - mask_to_bbox(child2)[0]) if mask_to_bbox(child2) else 0
-        child2_h = (mask_to_bbox(child2)[3] - mask_to_bbox(child2)[1]) if mask_to_bbox(child2) else 0
-        
-        if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
-                (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
-            return [mask]
+        child1_bbox = mask_to_bbox(child1)
+        child2_bbox = mask_to_bbox(child2)
+        if child1_bbox and child2_bbox:
+            child1_w = child1_bbox[2] - child1_bbox[0]
+            child1_h = child1_bbox[3] - child1_bbox[1]
+            child2_w = child2_bbox[2] - child2_bbox[0]
+            child2_h = child2_bbox[3] - child2_bbox[1]
+            
+            if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
+                    (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
+                return [mask]
         
     elif method == 'hough':
-        # Hough line split method
         min_side_fraction = params.get('min_side_fraction', 0.3)
         max_aspect_ratio = params.get('max_aspect_ratio', 10)
         pad = params.get('pad', 5)
         n_hough_lines = params.get('n_hough_lines', 10)
         min_score = params.get('min_score', 0.01)
         ignore_min_score = params.get('ignore_min_score', 20)
-        min_child_ratio = params.get('min_child_ratio', 0.2)
         
         # Check size constraints on parent
         longest_side = get_longest_bbox_side(mask)
@@ -451,7 +459,7 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         
         child1, child2, score = split_result
         
-        # Increment split counter and print if verbose
+        # Print verbose info
         if verbose:
             _split_count[0] += 1
             print(f"Depth {depth} | Split {_split_count[0]}: "
@@ -467,30 +475,38 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
     if child1.sum() < min_pixels or child2.sum() < min_pixels:
         return [mask]
     
-    # Additional validation for rectangular method only
-    # (Hough already validates children during split finding)
-    if method == 'rect':
-        # Check min_child_ratio for rect method
-        child1_bbox = mask_to_bbox(child1)
-        child2_bbox = mask_to_bbox(child2)
-        if child1_bbox and child2_bbox:
-            child1_w = child1_bbox[2] - child1_bbox[0]
-            child1_h = child1_bbox[3] - child1_bbox[1]
-            child2_w = child2_bbox[2] - child2_bbox[0]
-            child2_h = child2_bbox[3] - child2_bbox[1]
-            
-            min_child_ratio = params.get('min_child_ratio', 0.3)
-            if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
-                    (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
-                return [mask]
-    
     # Recurse on children
     masks1 = recursive_segment(image, child1, depth + 1, method, verbose, 
-                               _split_count, **params)
+                               _split_count, _depth_masks, **params)
     masks2 = recursive_segment(image, child2, depth + 1, method, verbose,
-                               _split_count, **params)
+                               _split_count, _depth_masks, **params)
     
     return masks1 + masks2
+
+
+# ============================================================================
+# SegmentationResult Class
+# ============================================================================
+
+class SegmentationResult:
+    """Container for segmentation results including tree structure."""
+    
+    def __init__(self, masks, depth_masks, method, params):
+        self.masks = masks  # Final leaf masks
+        self.depth_masks = depth_masks  # Masks organized by depth
+        self.method = method
+        self.params = params
+    
+    def save(self, filepath):
+        """Save segmentation result to file."""
+        with open(filepath, 'wb') as f:
+            pickle.dump(self, f)
+    
+    @staticmethod
+    def load(filepath):
+        """Load segmentation result from file."""
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
 
 
 # ============================================================================
@@ -499,250 +515,154 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
 
 def draw_segment_boundaries(image, all_masks, boundary_color=(255, 165, 0), 
                             thickness=2):
-    """
-    Draw boundaries around all segments on the image.
-    
-    Parameters:
-    -----------
-    image : ndarray
-        Original image
-    all_masks : list of ndarray
-        List of binary masks
-    boundary_color : tuple
-        RGB color for boundaries
-    thickness : int
-        Line thickness for boundaries
-    
-    Returns:
-    --------
-    ndarray : Image with boundaries drawn
-    """
+    """Draw boundaries around all segments on the image."""
     result = image.copy()
     
     for mask in all_masks:
-        # Find contours of the mask
         contours, _ = cv2.findContours(mask.astype(np.uint8), 
                                        cv2.RETR_EXTERNAL, 
                                        cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Draw contours
         cv2.drawContours(result, contours, -1, boundary_color, thickness)
     
     return result
 
 
 def create_mean_value_image(image, masks):
-    """
-    Create an image where each segment is filled with its mean color.
-    
-    Parameters:
-    -----------
-    image : ndarray
-        Original image
-    masks : list of ndarray
-        List of binary masks
-    
-    Returns:
-    --------
-    ndarray : Image with each segment filled with mean color
-    """
+    """Create an image where each segment is filled with its mean color."""
     result = np.zeros_like(image)
     
     for mask in masks:
         if mask.sum() > 0:
-            # Calculate mean color for this segment
             segment_pixels = image[mask > 0]
             mean_color = segment_pixels.mean(axis=0).astype(np.uint8)
-            
-            # Fill segment with mean color
             result[mask > 0] = mean_color
     
     return result
 
 
-def _collect_masks_by_depth(image, mask=None, depth=0, method='rect', depth_masks=None, **params):
+def visualize_selected_segment(image, masks, selected_mask_idx,
+                               highlight_color=(255, 165, 0), thickness=4,
+                               dash_length=5):
     """
-    Recursively segment and collect masks at each depth level.
-    
-    Returns:
-    --------
-    depth_masks : dict
-        Dictionary mapping depth -> list of masks at that depth
+    Highlight the actual segment (mask) with:
+    - 50% transparent overlay
+    - Dotted outline following the exact mask border
     """
-    H, W = image.shape[:2]
-    max_depth = params.get('max_depth', 10)
-    
-    if mask is None:
-        mask = np.ones((H, W), dtype=np.uint8)
-        depth_masks = {d: [] for d in range(max_depth + 1)}
-    
-    # Add current mask to this depth level
-    depth_masks[depth].append(mask)
-    
-    # Stopping conditions
-    min_pixels = params.get('min_pixels', 200)
-    
-    if depth >= max_depth:
-        return depth_masks
-    
-    if mask.sum() < min_pixels:
-        return depth_masks
-    
-    # Method-specific splitting logic
-    if method == 'rect':
-        min_size_factor = params.get('min_size_factor', None)
-        min_size = params.get('min_size', None)
-        score_threshold = params.get('score_threshold', 0.2)
-        center_penalty = params.get('center_penalty', 0.2)
-        soft_aspect_threshold = params.get('soft_aspect_threshold', 3.0)
-        hard_aspect_threshold = params.get('hard_aspect_threshold', 5.0)
-        
-        if min_size is None:
-            if min_size_factor is None:
-                min_size = min(H, W) // 20
-            else:
-                min_size = int(min(H, W) * min_size_factor)
-        
-        seg_bbox = mask_to_bbox(mask)
-        if seg_bbox is None:
-            return depth_masks
-        
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = image
-        
-        split_info = find_best_rect_split(gray, seg_bbox, min_size, score_threshold,
-                                         center_penalty, soft_aspect_threshold,
-                                         hard_aspect_threshold)
-        
-        if split_info is None:
-            return depth_masks
-        
-        child1, child2 = split_rect_mask(mask, split_info)
-        
-        # Validate children
-        child1_bbox = mask_to_bbox(child1)
-        child2_bbox = mask_to_bbox(child2)
-        if child1_bbox and child2_bbox:
-            child1_w = child1_bbox[2] - child1_bbox[0]
-            child1_h = child1_bbox[3] - child1_bbox[1]
-            child2_w = child2_bbox[2] - child2_bbox[0]
-            child2_h = child2_bbox[3] - child2_bbox[1]
-            
-            min_child_ratio = params.get('min_child_ratio', 0.3)
-            if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
-                    (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
-                return depth_masks
-    
-    elif method == 'hough':
-        min_side_fraction = params.get('min_side_fraction', 0.3)
-        max_aspect_ratio = params.get('max_aspect_ratio', 10)
-        pad = params.get('pad', 5)
-        n_hough_lines = params.get('n_hough_lines', 10)
-        min_score = params.get('min_score', 0.01)
-        ignore_min_score = params.get('ignore_min_score', 20)
-        
-        longest_side = get_longest_bbox_side(mask)
-        if longest_side / min(H, W) < min_side_fraction:
-            return depth_masks
-        
-        aspect = get_rotated_aspect_ratio(mask)
-        if aspect > max_aspect_ratio:
-            return depth_masks
-        
-        split_result = find_best_hough_split(
-            image, mask, pad, n_hough_lines, min_score, depth, ignore_min_score,
-            min_pixels, min_side_fraction, max_aspect_ratio
-        )
-        
-        if split_result is None:
-            return depth_masks
-        
-        child1, child2, score = split_result
-    
-    else:
-        raise ValueError(f"Unknown method: {method}")
-    
-    # Validate children
-    if child1.sum() < min_pixels or child2.sum() < min_pixels:
-        return depth_masks
-    
-    # Recurse on children
-    depth_masks = _collect_masks_by_depth(image, child1, depth + 1, method, depth_masks, **params)
-    depth_masks = _collect_masks_by_depth(image, child2, depth + 1, method, depth_masks, **params)
-    
-    return depth_masks
+    mean_img = create_mean_value_image(image, masks)
+
+    if selected_mask_idx >= len(masks):
+        return mean_img
+
+    selected_mask = masks[selected_mask_idx].astype(np.uint8)  # ensure 0/1
+
+    # Ensure mask is not empty
+    if selected_mask.sum() == 0:
+        return mean_img
+
+    h, w = image.shape[:2]
+
+    # ----- Transparent overlay -----
+    overlay = mean_img.copy()
+    color_arr = np.array(highlight_color, dtype=np.uint8)
+
+    # Create 3-channel mask
+    mask_3c = np.repeat(selected_mask[..., None], 3, axis=2)
+
+    # Blend color onto overlay
+    alpha = 0.5
+    overlay[selected_mask == 1] = (
+        (1 - alpha) * overlay[selected_mask == 1] + alpha * color_arr
+    ).astype(np.uint8)
+
+    mean_img = overlay
+
+    # ----- Compute mask contour -----
+    # Find exact border of mask
+    contours, _ = cv2.findContours(selected_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return mean_img
+
+    contour = max(contours, key=cv2.contourArea)  # largest connected component
+
+    # Flatten contour points into list of pairs
+    contour_points = contour[:, 0, :]  # shape (N, 2)
+
+    # ----- Draw dashed contour -----
+    for i in range(len(contour_points)):
+        p1 = tuple(contour_points[i])
+        p2 = tuple(contour_points[(i + 1) % len(contour_points)])
+
+        # Compute line length
+        dist = np.linalg.norm(np.array(p2) - np.array(p1))
+        if dist == 0:
+            continue
+
+        # Interpolate points along the segment
+        num_dashes = int(dist // (dash_length * 2)) + 1
+
+        for j in range(num_dashes):
+            start_t = (j * 2 * dash_length) / dist
+            end_t = min((j * 2 * dash_length + dash_length) / dist, 1.0)
+
+            if start_t >= 1:
+                break
+
+            # Linear interpolation
+            sx = int(p1[0] + (p2[0] - p1[0]) * start_t)
+            sy = int(p1[1] + (p2[1] - p1[1]) * start_t)
+
+            ex = int(p1[0] + (p2[0] - p1[0]) * end_t)
+            ey = int(p1[1] + (p2[1] - p1[1]) * end_t)
+
+            cv2.line(mean_img, (sx, sy), (ex, ey), highlight_color, thickness)
+
+    return mean_img
 
 
-def create_segmentation_gif(image, output_path='segmentation.gif', method='rect',
+def create_segmentation_gif(image, segmentation_result, output_path=None,
                             duration=300, final_duration=2000, loop=0,
                             boundary_color=(255, 165, 0), thickness=2,
-                            highlight_idx=None, io_buffer=None, **params):
+                            highlight_idx=None, io_buffer=None):
     """
-    Create an animated GIF showing the segmentation process depth by depth.
+    Create an animated GIF from segmentation result.
     
     Parameters:
     -----------
     image : ndarray
-        Input image
-    output_path : str
-        Path to save the GIF
-    method : str
-        'rect' or 'hough'
+        Original image
+    segmentation_result : SegmentationResult
+        Result from segment_with_tree()
+    output_path : str, optional
+        Path to save GIF (if None, must provide io_buffer)
     duration : int
-        Duration of each intermediate frame in milliseconds
+        Duration of intermediate frames in milliseconds
     final_duration : int
-        Duration of final mean-value frame in milliseconds
+        Duration of final frame in milliseconds
     loop : int
         Number of loops (0 = infinite)
     boundary_color : tuple
-        RGB color for segment boundaries
+        RGB color for boundaries
     thickness : int
-        Line thickness for boundaries
-    highlight_idx : int
-        Index of segment to highlight (default None)
-    io_buffer : io.BytesIO() object
-        To enable sending via FastAPI
-    **params : dict
-        Segmentation parameters (same as segment_rect or segment_hough)
-    
-    Returns:
-    --------
-    masks : list of binary masks (final leaf segments)
+        Line thickness
+    highlight_idx : int, optional
+        Index of segment to highlight in final frame
+    io_buffer : io.BytesIO, optional
+        Buffer to write GIF to (for FastAPI)
     """
-    # Prepare parameters
-    verbose = params.pop('verbose', False)
-    max_depth = params.get('max_depth', 10)
+    depth_masks = segmentation_result.depth_masks
+    max_depth = max(depth_masks.keys())
     
-    # Handle hough-specific preprocessing
-    image_proc = image.copy()
-    if method == 'hough':
-        blur = params.pop('blur', True)
-        blur_ksize = params.pop('blur_ksize', (7, 7))
-        blur_sigma = params.pop('blur_sigma', 3)
-        
-        if blur:
-            image_proc = cv2.GaussianBlur(image, blur_ksize, blur_sigma)
-        
-        if 'min_pixels' not in params or params['min_pixels'] is None:
-            params['min_pixels'] = int(image.shape[0] * image.shape[1] * 0.01)
-    
-    # Collect masks at each depth
-    depth_masks = _collect_masks_by_depth(image_proc, method=method, **params)
-    
-    # Create frames for each depth level
+    # Create frames
     gif_frames = []
     durations = []
     
-    # Add original image as first frame
+    # Original image
     gif_frames.append(image.copy())
     durations.append(duration)
     
     # Add frames for each depth with accumulating boundaries
     for depth in range(max_depth + 1):
         if len(depth_masks[depth]) > 0:
-            # Draw boundaries for all segments up to this depth
             all_masks_so_far = []
             for d in range(depth + 1):
                 all_masks_so_far.extend(depth_masks[d])
@@ -751,58 +671,42 @@ def create_segmentation_gif(image, output_path='segmentation.gif', method='rect'
                                            boundary_color, thickness)
             gif_frames.append(frame)
             durations.append(duration)
-            
-            if verbose:
-                print(f"Depth {depth}: {len(depth_masks[depth])} segments")
     
-    # Get final leaf masks
-    final_masks = []
-    for depth in range(max_depth, -1, -1):
-        if len(depth_masks[depth]) > 0:
-            final_masks = depth_masks[depth]
-            break
-    
-    # Add final frame with mean values
+    # Final frame with mean values
     if highlight_idx is None:
-        final_frame = create_mean_value_image(image, all_masks_so_far)
+        final_frame = create_mean_value_image(image, segmentation_result.masks)
     else:
-        final_frame = visualize_selected_segment(image, all_masks_so_far, highlight_idx)
-        
+        final_frame = visualize_selected_segment(image, segmentation_result.masks, 
+                                                 highlight_idx, boundary_color, 
+                                                 thickness)
+    
     gif_frames.append(final_frame)
     durations.append(final_duration)
     
-    # Convert frames to PIL Images
+    # Convert to PIL
     pil_frames = []
     for frame in gif_frames:
-        if frame.shape[2] == 3:
+        if len(frame.shape) == 3 and frame.shape[2] == 3:
             pil_frame = Image.fromarray(frame)
         else:
             pil_frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         pil_frames.append(pil_frame)
     
-    # Save as GIF with varying durations
+    # Save GIF
     if len(pil_frames) > 0:
+        save_kwargs = {
+            'save_all': True,
+            'append_images': pil_frames[1:],
+            'duration': durations,
+            'loop': loop
+        }
+        
         if output_path is not None:
-            pil_frames[0].save(
-                output_path,
-                save_all=True,
-                append_images=pil_frames[1:],
-                duration=durations,
-                loop=loop
-            )
+            pil_frames[0].save(output_path, **save_kwargs)
+            print(f"GIF saved to {output_path} ({len(pil_frames)} frames)")
         elif io_buffer is not None:
-            pil_frames[0].save(
-                io_buffer,
-                format="GIF",
-                save_all=True,
-                append_images=pil_frames[1:],
-                duration=durations,
-                loop=loop
-            )
-        print(f"\nGIF saved to {output_path} ({len(pil_frames)} frames)")
-    
-    print(f"Total leaf segments: {len(final_masks)}")
-    return final_masks
+            pil_frames[0].save(io_buffer, format='GIF', **save_kwargs)
+            print(f"GIF written to buffer ({len(pil_frames)} frames)")
 
 
 # ============================================================================
@@ -813,7 +717,7 @@ def segment_rect(image, min_size_factor=None, min_size=None,
                  center_penalty=0.2, soft_aspect_threshold=3.0,
                  hard_aspect_threshold=5.0, score_threshold=0.2,
                  min_child_ratio=0.3, max_depth=10, min_pixels=200,
-                 verbose=False):
+                 verbose=False, return_tree=True):
     """
     Segment image using rectangular Sobel-based splits.
     
@@ -841,10 +745,12 @@ def segment_rect(image, min_size_factor=None, min_size=None,
         Minimum pixels in a segment
     verbose : bool
         Print info each time a split is made
+    return_tree : bool
+        If True, return SegmentationResult with tree data. If False, return just masks.
     
     Returns:
     --------
-    masks : list of binary masks
+    SegmentationResult (if return_tree=True) or list of masks (if return_tree=False)
     """
     params = {
         'min_size_factor': min_size_factor,
@@ -858,16 +764,25 @@ def segment_rect(image, min_size_factor=None, min_size=None,
         'min_pixels': min_pixels
     }
     
-    masks = recursive_segment(image, method='rect', verbose=verbose, **params)
-    print(f"\nTotal segments: {len(masks)}")
-    return masks
+    if return_tree:
+        depth_masks = {}
+        masks = recursive_segment(image, method='rect', verbose=verbose, 
+                                 _depth_masks=depth_masks, **params)
+        if verbose:
+            print(f"\nTotal segments: {len(masks)}")
+        return SegmentationResult(masks, depth_masks, 'rect', params)
+    else:
+        masks = recursive_segment(image, method='rect', verbose=verbose, **params)
+        if verbose:
+            print(f"\nTotal segments: {len(masks)}")
+        return masks
 
 
 def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
                   pad=5, min_child_ratio=0.2, min_score=0.05, 
                   n_hough_lines=10, max_aspect_ratio=10,
                   blur=True, blur_ksize=(7, 7), blur_sigma=3, 
-                  ignore_min_score=5, verbose=False):
+                  ignore_min_score=5, verbose=False, return_tree=True):
     """
     Segment image using Hough line splits with variation scoring.
     
@@ -901,21 +816,23 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
         Number of initial splits to accept regardless of min_score
     verbose : bool
         Print info each time a split is made
+    return_tree : bool
+        If True, return SegmentationResult with tree data. If False, return just masks.
     
     Returns:
     --------
-    masks : list of binary masks
+    SegmentationResult (if return_tree=True) or list of masks (if return_tree=False)
     """
-
+    # Apply CLAHE preprocessing
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     l = clahe.apply(l)
     lab = cv2.merge([l, a, b])
-    image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    image_proc = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     if blur:
-        image = cv2.GaussianBlur(image, blur_ksize, blur_sigma)
+        image_proc = cv2.GaussianBlur(image_proc, blur_ksize, blur_sigma)
     
     # Default min_pixels to 1% of image area
     if min_pixels is None:
@@ -933,9 +850,18 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
         'ignore_min_score': ignore_min_score,
     }
     
-    masks = recursive_segment(image, method='hough', verbose=verbose, **params)
-    print(f"\nTotal segments: {len(masks)}")
-    return masks
+    if return_tree:
+        depth_masks = {}
+        masks = recursive_segment(image_proc, method='hough', verbose=verbose, 
+                                 _depth_masks=depth_masks, **params)
+        if verbose:
+            print(f"\nTotal segments: {len(masks)}")
+        return SegmentationResult(masks, depth_masks, 'hough', params)
+    else:
+        masks = recursive_segment(image_proc, method='hough', verbose=verbose, **params)
+        if verbose:
+            print(f"\nTotal segments: {len(masks)}")
+        return masks
 
 
 # ============================================================================
@@ -970,49 +896,42 @@ def visualize_masks(image, masks, max_show=10):
     plt.show()
 
 
-def visualize_selected_segment(image, masks, selected_mask_idx, 
-                               highlight_color=(255, 165, 0), thickness=4, 
-                               dash_length=5):
-    """
-    Create mean-valued segmentation image and highlight selected segment.
+# ============================================================================
+# Example Usage
+# ============================================================================
 
-    Args:
-        image: Original image (H,W,3)
-        masks: list of binary masks
-        selected_mask_idx: index of mask to highlight
-        highlight_color: RGB color for highlight
-        thickness: line thickness
-        dash_length: length of dashes in dashed line
+"""
+# Example Usage - Simple segmentation (backward compatible)
+image = read_image('image.jpg', max_dim=1024)
+masks_rect = segment_rect(image, min_size_factor=0.05, return_tree=False)
+masks_hough = segment_hough(image, max_depth=8, return_tree=False)
 
-    Returns:
-        vis_img: mean-valued image with dashed box around selected segment
-    """
-    # Create mean value image
-    mean_img = create_mean_value_image(image, masks)
-    
-    # Get selected mask and its bounding box
-    if selected_mask_idx >= len(masks):
-        return mean_img
-    
-    selected_mask = masks[selected_mask_idx]
-    bbox = mask_to_bbox(selected_mask)
-    
-    if bbox is None:
-        return mean_img
-    
-    x1, y1, x2, y2 = bbox
-    
-    # Draw dashed box around selected segment
-    for i in range(x1, x2, dash_length * 2):
-        cv2.line(mean_img, (i, y1), (min(i + dash_length, x2), y1), 
-                highlight_color, thickness)
-        cv2.line(mean_img, (i, y2), (min(i + dash_length, x2), y2), 
-                highlight_color, thickness)
-    
-    for i in range(y1, y2, dash_length * 2):
-        cv2.line(mean_img, (x1, i), (x1, min(i + dash_length, y2)), 
-                highlight_color, thickness)
-        cv2.line(mean_img, (x2, i), (x2, min(i + dash_length, y2)), 
-                highlight_color, thickness)
-    
-    return mean_img
+# Example Usage - Segmentation with tree data (default, for GIF creation)
+seg_result = segment_rect(image, min_size_factor=0.05, verbose=True)  # returns SegmentationResult
+masks = seg_result.masks  # Access masks like before
+
+# Save result for later
+seg_result.save('segmentation.pkl')
+
+# Load and create GIF without re-segmenting
+seg_result = SegmentationResult.load('segmentation.pkl')
+create_segmentation_gif(
+    image,
+    seg_result,
+    output_path='segmentation.gif',
+    duration=300,
+    final_duration=2000,
+    boundary_color=(255, 165, 0),
+    highlight_idx=0  # Optional: highlight specific segment
+)
+
+# Create mean-value visualization
+mean_img = create_mean_value_image(image, seg_result.masks)
+plt.imshow(mean_img)
+plt.show()
+
+# Visualize with highlighted segment
+highlighted = visualize_selected_segment(image, seg_result.masks, 0)
+plt.imshow(highlighted)
+plt.show()
+"""

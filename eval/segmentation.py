@@ -136,7 +136,8 @@ def evaluate_segmentation(eval_dir, segmentation_function):
         h, w = img.shape[:2]
 
         # ---- Predicted mask ----
-        pred_binary_masks = segmentation_function(img)  # shape (N,H,W) or list of (H,W)
+        pred_result = segmentation_function(img)
+        pred_binary_masks = pred_result.masks # shape (N,H,W) or list of (H,W)
         mask_pred = binary_masks_to_label_mask(pred_binary_masks)
 
         # ---- GT label mask ----
@@ -220,8 +221,12 @@ def compare_segmentations(eval_dir, segmentation_function1, segmentation_functio
     mask_gt_label = polygons_to_label_mask(h, w, gt_polygons)
 
     # Run segmentation functions
-    pred1_masks = segmentation_function1(img)  # list of binary masks
-    pred2_masks = segmentation_function2(img)
+    pred1_result = segmentation_function1(img)  # list of binary masks
+    pred2_result = segmentation_function2(img)
+
+    # Convert to label masks
+    pred1_masks = pred1_result.masks  # list of binary masks
+    pred2_masks = pred2_result.masks
 
     mask_pred1_label = binary_masks_to_label_mask(pred1_masks)
     mask_pred2_label = binary_masks_to_label_mask(pred2_masks)
