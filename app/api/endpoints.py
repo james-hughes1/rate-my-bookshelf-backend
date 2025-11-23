@@ -50,8 +50,7 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     segment_texts = assign_text_to_segments(
         img,
         seg_result.masks,  # Use masks from result
-        [boxes, text, confidences],
-        verbose=True
+        [boxes, text, confidences]
     )
 
     # Format text
