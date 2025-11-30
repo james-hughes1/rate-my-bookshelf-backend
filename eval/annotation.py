@@ -1,5 +1,6 @@
-import os
 import json
+import os
+
 import cv2
 import numpy as np
 
@@ -46,7 +47,7 @@ def save_ground_truth(image, polygons, output_dir="images/eval", index=None):
     # Save image (convert RGB to BGR if necessary)
     img_path = os.path.join(output_dir, img_filename)
     if image.shape[2] == 3:
-        cv2.imwrite(img_path, image[:, :, ::-1])   # assume RGB → convert to BGR
+        cv2.imwrite(img_path, image[:, :, ::-1])  # assume RGB → convert to BGR
     else:
         cv2.imwrite(img_path, image)
 
@@ -58,7 +59,7 @@ def save_ground_truth(image, polygons, output_dir="images/eval", index=None):
     else:
         gt = {}
 
-    gt[img_filename] = polygons   # <--- polygons stored directly
+    gt[img_filename] = polygons  # <--- polygons stored directly
 
     with open(gt_path, "w") as f:
         json.dump(gt, f, indent=2)

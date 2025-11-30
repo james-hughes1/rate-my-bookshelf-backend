@@ -1,6 +1,8 @@
 import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.api import endpoints
 
 app = FastAPI(title="Bookshelf OCR & Recommendation API")
@@ -15,7 +17,7 @@ app.add_middleware(
     allow_origins=origins,  # or ["*"] for testing only
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 app.include_router(endpoints.router)

@@ -1,17 +1,31 @@
-import time
-import json
-import cv2
 import io
-from fastapi import APIRouter, UploadFile, File, Form
+
+import cv2
+from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import JSONResponse, Response
-from ..services.image_processing import (segment_rect, segment_hough, read_image,
-                                         SegmentationResult)
-from ..services.ocr import (ocr_from_array, ocr_text_prompt, 
-                            assign_text_to_segments, mask_to_bbox)
-from ..services.visualize import visualize_selected_segment, create_segmentation_gif
-from ..services.llm_client import (analyse_bookshelf, analyse_library)
+
+from ..services.image_processing import (
+    SegmentationResult,
+    read_image,
+    segment_hough,
+    segment_rect,
+)
+from ..services.llm_client import (
+    analyse_bookshelf,
+    analyse_library,
+)
+from ..services.ocr import (
+    assign_text_to_segments,
+    ocr_from_array,
+    ocr_text_prompt,
+)
+from ..services.visualize import (
+    create_segmentation_gif,
+    visualize_selected_segment,
+)
 
 router = APIRouter()
+
 
 @router.get("/ping")
 async def ping():
@@ -40,37 +54,35 @@ async def upload_bookshelf(file: UploadFile = File(...)):
     # Segment image (returns SegmentationResult with tree data)
     print("Segmenting image...")
     seg_result = segment_rect(img, return_tree=True, verbose=True)
-    
+
     # Save segmentation result for later GIF generation
     seg_result.save(f"/tmp/{file.filename}_segmentation.pkl")
 
     # Group text by segments
     print("Assigning text to segments...")
     segment_texts = assign_text_to_segments(
-        img,
-        seg_result.masks,  # Use masks from result
-        [boxes, text, confidences]
+        img, seg_result.masks, [boxes, text, confidences]  # Use masks from result
     )
 
     # Format text
     print("Formatting segmented text...")
     segment_texts_prompt = ocr_text_prompt(segment_texts)
     print(segment_texts_prompt)
-    
+
     # Analyse the bookshelf
     print("Asking AI to analyse...")
-    analysis = analyse_bookshelf(segment_texts_prompt, mode='analysis')
-    
+    analysis = analyse_bookshelf(segment_texts_prompt, mode="analysis")
+
     return JSONResponse(
         {
             "recommendation": {
                 "recommended_book": analysis.recommended_book,
-                "explanation": analysis.explanation
+                "explanation": analysis.explanation,
             },
             "three_words": {
                 "word_one": analysis.word_one,
                 "word_two": analysis.word_two,
-                "word_three": analysis.word_three
+                "word_three": analysis.word_three,
             },
             "scores": {
                 "age": analysis.age,
@@ -78,17 +90,14 @@ async def upload_bookshelf(file: UploadFile = File(...)):
                 "mood": analysis.mood,
                 "popularity": analysis.popularity,
                 "focus": analysis.focus,
-                "realism": analysis.realism
-            }
+                "realism": analysis.realism,
+            },
         }
     )
 
 
 @router.post("/library")
-async def upload_library(
-    file: UploadFile = File(...),
-    description: str = Form(...)
-):
+async def upload_library(file: UploadFile = File(...), description: str = Form(...)):
     """
     Upload an image of a library shelf, segment it, run OCR, prompt LLM.
     """
@@ -106,7 +115,7 @@ async def upload_library(
     # Segment image (returns SegmentationResult with tree data)
     print("Segmenting image...")
     seg_result = segment_hough(img, return_tree=True, verbose=True)
-    
+
     # Save segmentation result for later GIF generation
     seg_result.save(f"/tmp/{file.filename}_segmentation.pkl")
 
@@ -127,13 +136,10 @@ async def upload_library(
     print("Asking AI to analyse...")
     library_analysis = analyse_library(segment_texts_prompt, description)
     recommended_idx = library_analysis.recommended_idx
-    
+
     # Get the mask index from segment_texts
     _, chosen_mask_idx = segment_texts[recommended_idx]
-    
-    # Convert mask to bbox for JSON serialization
-    chosen_bbox = mask_to_bbox(seg_result.masks[chosen_mask_idx])
-    
+
     recommended_book = library_analysis.recommended_book
     explanation = library_analysis.explanation
     print(f"Recommended: {recommended_book}")
@@ -143,7 +149,7 @@ async def upload_library(
         {
             "recommended_book": recommended_book,
             "explanation": explanation,
-            "chosen_mask_idx": int(chosen_mask_idx)
+            "chosen_mask_idx": int(chosen_mask_idx),
         }
     )
 
@@ -162,7 +168,7 @@ async def highlight_segment(
     image_path = f"/tmp/{file.filename}"
     with open(image_path, "wb") as f:
         f.write(await file.read())
-    
+
     img = read_image(image_path, max_dim=1024)
 
     # Load saved segmentation result (no re-segmentation!)
@@ -175,19 +181,19 @@ async def highlight_segment(
 
     # Create visualization with highlighted segment
     img_vis = visualize_selected_segment(
-        img, 
-        seg_result.masks, 
+        img,
+        seg_result.masks,
         mask_idx,
         highlight_color=(255, 165, 0),
         thickness=4,
-        dash_length=5
+        dash_length=5,
     )
 
     # Convert RGB to BGR for OpenCV encoding
     img_bgr = cv2.cvtColor(img_vis, cv2.COLOR_RGB2BGR)
 
     # Encode as PNG
-    success, encoded_image = cv2.imencode('.png', img_bgr)
+    success, encoded_image = cv2.imencode(".png", img_bgr)
     if not success:
         raise RuntimeError("Failed to encode image")
 
@@ -209,7 +215,7 @@ async def create_gif(
     image_path = f"/tmp/{file.filename}"
     with open(image_path, "wb") as f:
         f.write(await file.read())
-    
+
     img = read_image(image_path, max_dim=1024)
 
     # Load saved segmentation result
@@ -217,8 +223,11 @@ async def create_gif(
         seg_result = SegmentationResult.load(f"/tmp/{file.filename}_segmentation.pkl")
     except FileNotFoundError:
         return JSONResponse(
-            {"error": "Segmentation result not found. Please upload and segment first."},
-            status_code=404
+            {
+                "error": """
+Segmentation result not found. Please upload and segment first."""
+            },
+            status_code=404,
         )
 
     # Create GIF in memory
@@ -232,9 +241,9 @@ async def create_gif(
         final_duration=2000,
         boundary_color=(255, 165, 0),
         thickness=2,
-        highlight_idx=mask_idx
+        highlight_idx=mask_idx,
     )
-    
+
     gif_buffer.seek(0)
-    
+
     return Response(content=gif_buffer.getvalue(), media_type="image/gif")

@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 from google import genai
 from pydantic import BaseModel
@@ -13,39 +14,49 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 PROMPT_BOOKS = """
     You are an assistant that reads messy OCR text from books on a bookshelf.
-    The OCR output for each shelf position is provided below. Each line starts with 'Scan i:'.
+    The OCR output for each shelf position is provided below.
+    Each line starts with 'Scan i:'.
 
     Your task:
     1. For each scan, identify the books.
-    2. Output a JSON array containing the each book you find, and include the index, title, author, and confidence score between 0 and 1.
-    3. If a scan is empty or cannot be identified, you may skip it or leave title/author blank.
+    2. Output a JSON array containing the each book you find, and include the
+    index, title, author, and confidence score between 0 and 1.
+    3. If a scan is empty or cannot be identified,
+    you may skip it or leave title/author blank.
     4. There may be multiple books per scan.
 
-    Here is the OCR data: 
+    Here is the OCR data:
 """
 
 PROMPT_THREE_WORDS = """
     You are an insightful and creative literary assistant.
-    You have already analyzed the list of books on this person's bookshelf, including each title, author, and confidence score (which reflects how certain the identification is).
-    
-    Your goal now is to distill the *essence* of this bookshelf into exactly three evocative, meaningful words.
-    These words should feel personal—something that captures the reader's unique taste, mood, or identity through their books.
-    
+    You have already analyzed the list of books on this person's bookshelf,
+    including each title, author, and confidence score
+    (which reflects how certain the identification is).
+
+    Your goal now is to distill the *essence* of this bookshelf into exactly
+    three evocative, meaningful words. These words should feel personal—something
+    that captures the reader's unique taste, mood, or identity through their books.
+
     Think like a poet or a curator, not a statistician.
-    Avoid generic terms like "fiction" or "reading" unless they truly fit the collection.
-    You may choose abstract or emotional words if they better reflect the spirit of the bookshelf.
-    
-    Output your result as valid JSON with the fields: word_one, word_two, and word_three.
-    
+    Avoid generic terms like "fiction" or "reading" unless they truly
+    fit the collection. You may choose abstract or emotional words if they better
+    reflect the spirit of the bookshelf.
+
+    Output your result as valid JSON with the fields: word_one, word_two,
+    and word_three.
+
     Here are the books you identified:
 """
 
 PROMPT_RECOMMEND_BOOK = """
     You are an assistant that reads messy OCR text from books on a bookshelf.
     You have already helped me to identify the books on the shelf.
-    Now, given your previous output, please provide a new book, not on the shelf, that the owner of this bookshelf might like to read.
-    Output a JSON object and include the recommended book and explanation as two separate fields.
-    Address your explanation to the owner of the bookshelf, using the second-person perspective.
+    Now, given your previous output, please provide a new book, not on the shelf,
+    that the owner of this bookshelf might like to read.
+    Output a JSON object and include the recommended book and explanation as two
+    separate fields. Address your explanation to the owner of the bookshelf,
+    using the second-person perspective.
 
     Here are the books you identified:
 """
@@ -53,7 +64,8 @@ PROMPT_RECOMMEND_BOOK = """
 PROMPT_BOOKSHELF_SCORES = """
     You are an assistant that reads messy OCR text from books on a bookshelf.
     You have already helped me to identify the books on the shelf.
-    Now, given your previous output, please score the book collection on the following scales from -1.0 to 1.0:
+    Now, given your previous output, please score the book collection on the
+    following scales from -1.0 to 1.0:
     1. age. Classic (-1.0) to Modern (1.0)
     2. intensity. Beach-ready (-1.0) to Intense (1.0)
     3. mood. Dystopian (-1.0) to Light-hearted (1.0)
@@ -67,45 +79,69 @@ PROMPT_BOOKSHELF_SCORES = """
 
 PROMPT_ANALYSE_SHELF = """
     You are an insightful and creative literary assistant.
-    Below you are provided with an OCR scan of somebody's bookshelf - it is up to you to identify potential titles and authors amongst noisy text found.
-    If you reference one of the books, be sure to format the title/author name nicely, as it may be messy in the scan.
+    Below you are provided with an OCR scan of somebody's bookshelf - it is
+    up to you to identify potential titles and authors amongst noisy text found.
+    If you reference one of the books, be sure to format the title/author
+    name nicely, as it may be messy in the scan.
 
-    Your goal is now to analyse this person's bookshelf and help them understand their reading tastes and preferences, and provide a personalized recommendation.
+    Your goal is now to analyse this person's bookshelf and help them understand
+    their reading tastes and preferences, and provide a personalized recommendation.
 
     Tasks:
     1. Score the collection as a float between -1.0 to 1.0 on fields:
-    age (Old -1.0 → Modern +1.0), intensity (Beach Read -1.0 → Intense Study +1.0), mood (Dystopian -1.0 → Inspiring +1.0), 
-    popularity (Esoteric -1.0 → Well-known +1.0), focus (Plot -1.0 → Character +1.0), realism (Down-to-earth -1.0 → Imaginary +1.0).
-    2. Distill the essence of the bookshelf into exactly three meaningful words that reflect the owner's taste and identity. Avoid generic words; try to make them unique to the person and their collection.
-    3. Recommend a new book not on the shelf, and craft a short explanation addressed directly to the owner written in the second-person. Respond with fields recommended_book and explanation separately.
-      
+    age (Old -1.0 → Modern +1.0),
+    intensity (Beach Read -1.0 → Intense Study +1.0),
+    mood (Dystopian -1.0 → Inspiring +1.0),
+    popularity (Esoteric -1.0 → Well-known +1.0),
+    focus (Plot -1.0 → Character +1.0),
+    realism (Down-to-earth -1.0 → Imaginary +1.0).
+    2. Distill the essence of the bookshelf into exactly three meaningful
+    words that reflect the owner's taste and identity. Avoid generic words;
+    try to make them unique to the person and their collection.
+    3. Recommend a new book not on the shelf, and craft a short explanation
+    addressed directly to the owner written in the second-person.
+    Respond with fields recommended_book and explanation separately.
+
     Output your result as valid JSON.
-    
+
     Here are the books that were identified:
 """
 
 PROMPT_LIBRARY_SHELF = """
     You are an insightful and creative literary assistant.
-    Below you are provided with an OCR scan of a bookshelf someone is looking at - it is up to you to identify potential titles and authors amongst noisy text found.
-    If you reference one of the books, be sure to format the title/author name nicely, as it may be messy in the scan.
+    Below you are provided with an OCR scan of a bookshelf someone is looking at
+     - it is up to you to identify potential titles and authors
+    amongst noisy text found.
+    If you reference one of the books,
+    be sure to format the title/author name nicely, as it may be messy in the scan.
 
-    You are also provided with a user's description of what sort of book/style they are looking for.
-    
-    Your goal is now to analyse the bookshelf and provide a personalized recommendation.
+    You are also provided with a user's description of what sort
+    of book/style they are looking for.
+
+    Your goal is now to analyse the bookshelf and provide a
+    personalized recommendation.
 
     Tasks:
-    1. Recommend one of the books on the shelf, and craft a short explanation addressed directly to the owner written in the second-person.
-    Ensure you nicely format the title and/or author (if you have just the title and you know the author, feel free to add 'by ...')
-    In some cases, you may want to point out in your explanation that while the recommended title was your best attempt, none of the books really match their tastes.
-    In other cases, you may see multiple books that they would like, feel free to mention others in your explanation.
-    Always choose one of the books, but your explanation should be whatever is appropriate to the specific situation.
+    1. Recommend one of the books on the shelf, and craft a short explanation
+    addressed directly to the owner written in the second-person.
+    Ensure you nicely format the title and/or author (if you have just the title
+    and you know the author, feel free to add 'by ...')
+    In some cases, you may want to point out in your explanation that while the
+    recommended title was your best attempt,
+    none of the books really match their tastes.
+    In other cases, you may see multiple books that they would like,
+    feel free to mention others in your explanation.
+    Always choose one of the books,
+    but your explanation should be whatever is appropriate to the specific situation.
     Respond with fields recommended_book and explanation separately.
-    2. In the provided book spines below, each is given a number. Provide the number that matches your recommended book as recommended_idx
-      
+    2. In the provided book spines below, each is given a number.
+    Provide the number that matches your recommended book as recommended_idx.
+
     Output your result as valid JSON.
-    
+
     Here is the info:
 """
+
 
 class BookInfo(BaseModel):
     idx: int
@@ -113,14 +149,17 @@ class BookInfo(BaseModel):
     author: str
     confidence: float
 
+
 class ThreeWords(BaseModel):
     word_one: str
     word_two: str
     word_three: str
 
+
 class Recommendation(BaseModel):
     recommended_book: str
     explanation: str
+
 
 class BookshelfScores(BaseModel):
     age: float
@@ -129,6 +168,7 @@ class BookshelfScores(BaseModel):
     popularity: float
     focus: float
     realism: float
+
 
 class BookshelfAnalysis(BaseModel):
     age: float
@@ -143,41 +183,46 @@ class BookshelfAnalysis(BaseModel):
     recommended_book: str
     explanation: str
 
+
 class LibraryAnalysis(BaseModel):
     recommended_book: str
     explanation: str
     recommended_idx: int
 
+
 def get_books_from_ocr(ocr_data):
     """
     Sends OCR data to Gemini API and asks it to return a structured list of books.
-    
+
     Args:
         ocr_data: string containing all OCR scan text (can be multiline)
-        
+
     Returns:
         List[Dict] of book information, e.g.
         [
-            {"idx": 0, "title": "The Bell Jar", "author": "Sylvia Plath", "confidence": 0.7},
+            {
+                "idx": 0,
+                "title": "The Bell Jar",
+                "author": "Sylvia Plath",
+                "confidence": 0.7},
             ...
         ]
     """
     # Craft the prompt
-    
 
     try:
         # Call Gemini API
         response = client.models.generate_content(
             model=DEFAULT_MODEL,
-            contents=PROMPT_BOOKS+ocr_data,
+            contents=PROMPT_BOOKS + ocr_data,
             config={
                 "response_mime_type": "application/json",
                 "response_schema": list[BookInfo],
-            }
+            },
         )
 
         books: list[BookInfo] = response.parsed
-        
+
         return books
 
     except Exception as e:
@@ -215,27 +260,27 @@ def format_books_for_prompt(books: list[BookInfo], confidence_threshold: float) 
 def analyse_bookshelf(books_string, mode):
     """
     Analyse the bookshelf based on identified books.
-    
+
     Args:
         books: List of BookInfo objects
         mode: str, one of 'three_words', 'recommendation', 'scores'
-        
+
     Returns:
         Depending on mode:
         - 'three_words': str of three words
         - 'recommendation': Recommendation object
         - 'scores': BookshelfScores object
     """
-    if mode == 'three_words':
+    if mode == "three_words":
         prompt = PROMPT_THREE_WORDS + books_string
         response_schema = ThreeWords
-    elif mode == 'recommendation':
+    elif mode == "recommendation":
         prompt = PROMPT_RECOMMEND_BOOK + books_string
         response_schema = Recommendation
-    elif mode == 'scores':
+    elif mode == "scores":
         prompt = PROMPT_BOOKSHELF_SCORES + books_string
         response_schema = BookshelfScores
-    elif mode == 'analysis':
+    elif mode == "analysis":
         prompt = PROMPT_ANALYSE_SHELF + books_string
         response_schema = BookshelfAnalysis
     else:
@@ -248,7 +293,7 @@ def analyse_bookshelf(books_string, mode):
             config={
                 "response_mime_type": "application/json",
                 "response_schema": response_schema,
-            }
+            },
         )
 
         return response.parsed
@@ -261,12 +306,14 @@ def analyse_bookshelf(books_string, mode):
 def analyse_library(books_string, user_string):
     """
     Analyse the library shelf based on given tastes.
-    
+
     Args:
         books_string: Book spines scanned
         user_string: User tastes info
     """
-    prompt = PROMPT_LIBRARY_SHELF + "BOOKS: " + books_string + "\nUSER INFO: " + user_string
+    prompt = (
+        PROMPT_LIBRARY_SHELF + "BOOKS: " + books_string + "\nUSER INFO: " + user_string
+    )
 
     try:
         response = client.models.generate_content(
@@ -275,7 +322,7 @@ def analyse_library(books_string, user_string):
             config={
                 "response_mime_type": "application/json",
                 "response_schema": LibraryAnalysis,
-            }
+            },
         )
 
         return response.parsed

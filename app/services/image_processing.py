@@ -1,9 +1,7 @@
+import pickle
+
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-import io
-import pickle
 
 
 def read_image(image_path, max_dim):
@@ -14,14 +12,16 @@ def read_image(image_path, max_dim):
     h, w = image.shape[:2]
     scale = min(max_dim / h, max_dim / w, 1.0)
     if scale < 1.0:
-        image = cv2.resize(image, (int(w*scale), int(h*scale)), 
-                          interpolation=cv2.INTER_AREA)
+        image = cv2.resize(
+            image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA
+        )
     return image
 
 
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
 
 def mask_to_bbox(mask, pad=0):
     """Get bounding box of mask with optional padding."""
@@ -64,21 +64,23 @@ def get_longest_bbox_side(mask):
 # Splitting Methods
 # ============================================================================
 
-def score_rect_split(image_gray, seg_bbox, pos, direction, center_penalty, 
-                     soft_aspect_threshold):
+
+def score_rect_split(
+    image_gray, seg_bbox, pos, direction, center_penalty, soft_aspect_threshold
+):
     """Score a rectangular split using Sobel edge detection with penalties."""
     x1, y1, x2, y2 = seg_bbox
     band_width = 3
     width = x2 - x1
     height = y2 - y1
-    
-    if direction == 'vertical':
+
+    if direction == "vertical":
         x_start = max(x1, pos - band_width)
         x_end = min(x2, pos + band_width)
         band = image_gray[y1:y2, x_start:x_end]
         grad = cv2.Sobel(band, cv2.CV_64F, 1, 0, ksize=3)
         edge_score = np.sum(np.abs(grad)) / ((y2 - y1) ** 2)
-        
+
         total_len = x2 - x1
         rel_pos = (pos - x1) / total_len
         cuts_shorter_side = width < height
@@ -88,55 +90,77 @@ def score_rect_split(image_gray, seg_bbox, pos, direction, center_penalty,
         band = image_gray[y_start:y_end, x1:x2]
         grad = cv2.Sobel(band, cv2.CV_64F, 0, 1, ksize=3)
         edge_score = np.sum(np.abs(grad)) / ((x2 - x1) ** 2)
-        
+
         total_len = y2 - y1
         rel_pos = (pos - y1) / total_len
         cuts_shorter_side = height < width
-    
+
     # Center penalty
-    if cuts_shorter_side and max(width / height, height / width) > soft_aspect_threshold:
+    if (
+        cuts_shorter_side
+        and max(width / height, height / width) > soft_aspect_threshold
+    ):
         penalty = 1.0
     else:
         dist_from_center = abs(rel_pos - 0.5) * 2
-        penalty = (dist_from_center ** (1 + center_penalty))
-    
+        penalty = dist_from_center ** (1 + center_penalty)
+
     return penalty * edge_score
 
 
-def find_best_rect_split(image_gray, seg_bbox, min_size, score_threshold, 
-                         center_penalty, soft_aspect_threshold, hard_aspect_threshold):
+def find_best_rect_split(
+    image_gray,
+    seg_bbox,
+    min_size,
+    score_threshold,
+    center_penalty,
+    soft_aspect_threshold,
+    hard_aspect_threshold,
+):
     """Find best rectangular split for a bounding box."""
     x1, y1, x2, y2 = seg_bbox
     w, h = x2 - x1, y2 - y1
-    
+
     if w < min_size * 2 and h < min_size * 2:
         return None
-    
+
     # Check hard aspect ratio threshold
     if max(w / h, h / w) > hard_aspect_threshold:
         return None
-    
+
     best_score = score_threshold
     best_split = None
-    
+
     # Try vertical splits
     if w >= min_size * 2:
         for x in range(x1 + min_size, x2 - min_size, 5):
-            score = score_rect_split(image_gray, seg_bbox, x, 'vertical',
-                                    center_penalty, soft_aspect_threshold)
+            score = score_rect_split(
+                image_gray,
+                seg_bbox,
+                x,
+                "vertical",
+                center_penalty,
+                soft_aspect_threshold,
+            )
             if score > best_score:
                 best_score = score
-                best_split = ('vertical', x)
-    
+                best_split = ("vertical", x)
+
     # Try horizontal splits
     if h >= min_size * 2:
         for y in range(y1 + min_size, y2 - min_size, 5):
-            score = score_rect_split(image_gray, seg_bbox, y, 'horizontal',
-                                    center_penalty, soft_aspect_threshold)
+            score = score_rect_split(
+                image_gray,
+                seg_bbox,
+                y,
+                "horizontal",
+                center_penalty,
+                soft_aspect_threshold,
+            )
             if score > best_score:
                 best_score = score
-                best_split = ('horizontal', y)
-    
+                best_split = ("horizontal", y)
+
     return best_split
 
 
@@ -144,8 +168,8 @@ def split_rect_mask(mask, split_info):
     """Split a mask based on rectangular split."""
     direction, pos = split_info
     H, W = mask.shape
-    
-    if direction == 'vertical':
+
+    if direction == "vertical":
         child1 = mask.copy()
         child2 = mask.copy()
         child1[:, pos:] = 0
@@ -155,7 +179,7 @@ def split_rect_mask(mask, split_info):
         child2 = mask.copy()
         child1[pos:, :] = 0
         child2[:pos, :] = 0
-    
+
     return child1, child2
 
 
@@ -165,10 +189,10 @@ def extend_line_to_boundary(x1, y1, x2, y2, width, height):
     length = np.hypot(dx, dy)
     if length == 0:
         return x1, y1, x2, y2
-    
+
     dx /= length
     dy /= length
-    
+
     # Find all boundary intersections
     ts = []
     for X in [0, width - 1]:
@@ -183,123 +207,138 @@ def extend_line_to_boundary(x1, y1, x2, y2, width, height):
             X = x1 + t * dx
             if 0 <= X < width:
                 ts.append(t)
-    
+
     if len(ts) < 2:
         return x1, y1, x2, y2
-    
+
     tmin, tmax = min(ts), max(ts)
     xA = x1 + tmin * dx
     yA = y1 + tmin * dy
     xB = x1 + tmax * dx
     yB = y1 + tmax * dy
-    
+
     return int(xA), int(yA), int(xB), int(yB)
 
 
-def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score, 
-                          depth, ignore_min_score, min_pixels, min_side_fraction,
-                          max_aspect_ratio):
+def find_best_hough_split(
+    image_bgr,
+    mask,
+    pad,
+    n_hough_lines,
+    min_score,
+    depth,
+    ignore_min_score,
+    min_pixels,
+    min_side_fraction,
+    max_aspect_ratio,
+):
     """Find best Hough line split for a mask."""
     H, W = image_bgr.shape[:2]
     bbox = mask_to_bbox(mask, pad)
     if bbox is None:
         return None
-    
+
     x1, y1, x2, y2 = bbox
-    crop = image_bgr[y1:y2+1, x1:x2+1]
-    crop_mask = mask[y1:y2+1, x1:x2+1].astype(np.uint8)
+    crop = image_bgr[y1 : y2 + 1, x1 : x2 + 1]
+    crop_mask = mask[y1 : y2 + 1, x1 : x2 + 1].astype(np.uint8)
     Hc, Wc = crop_mask.shape
-    
+
     # Compute parent variation
     parent_pixels = crop[crop_mask > 0]
     parent_variation = parent_pixels.std() if parent_pixels.size > 0 else 0
-    
+
     # Edge detection + Hough
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
-    raw_lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180,
-                                threshold=40, minLineLength=0, maxLineGap=10)
-    
+    raw_lines = cv2.HoughLinesP(
+        edges, rho=1, theta=np.pi / 180, threshold=40, minLineLength=0, maxLineGap=10
+    )
+
     if raw_lines is None:
         return None
-    
+
     # Score lines by detection fraction
     lines = []
-    for (xa, ya, xb, yb) in raw_lines[:, 0]:
+    for xa, ya, xb, yb in raw_lines[:, 0]:
         dx, dy = xb - xa, yb - ya
         detected_len = np.hypot(dx, dy)
         if detected_len == 0:
             continue
-        
+
         # Extend to boundaries
         xA, yA, xB, yB = extend_line_to_boundary(xa, ya, xb, yb, Wc, Hc)
         super_len = np.hypot(xB - xA, yB - yA)
-        
+
         if super_len > 0:
             frac = detected_len / super_len
             # Convert to full image coordinates
             lines.append((frac, (xA + x1, yA + y1, xB + x1, yB + y1)))
-    
+
     lines.sort(key=lambda x: x[0], reverse=True)
     top_lines = lines[:n_hough_lines]
-    
+
     # Find best split by variation drop
     best_split = None
     best_score = 0
-    
+
     xs_full, ys_full = np.meshgrid(np.arange(W), np.arange(H))
-    
+
     for frac, (x1_line, y1_line, x2_line, y2_line) in top_lines:
         # Split mask by line
-        lv = ((y2_line - y1_line) * (xs_full - x1_line) - 
-              (x2_line - x1_line) * (ys_full - y1_line))
+        lv = (y2_line - y1_line) * (xs_full - x1_line) - (x2_line - x1_line) * (
+            ys_full - y1_line
+        )
         child1 = mask.copy()
         child2 = mask.copy()
         child1[(lv < 0) | (mask == 0)] = 0
         child2[(lv >= 0) | (mask == 0)] = 0
-        
+
         # Validate children immediately
         sum1, sum2 = child1.sum(), child2.sum()
         if sum1 < min_pixels or sum2 < min_pixels:
             continue
-        
+
         # Check child bounding box sizes
         longest1 = get_longest_bbox_side(child1)
         longest2 = get_longest_bbox_side(child2)
-        if (longest1 / min(H, W) < min_side_fraction or 
-            longest2 / min(H, W) < min_side_fraction):
+        if (
+            longest1 / min(H, W) < min_side_fraction
+            or longest2 / min(H, W) < min_side_fraction
+        ):
             continue
-        
+
         # Check child aspect ratios
-        if (get_rotated_aspect_ratio(child1) > max_aspect_ratio or 
-            get_rotated_aspect_ratio(child2) > max_aspect_ratio):
+        if (
+            get_rotated_aspect_ratio(child1) > max_aspect_ratio
+            or get_rotated_aspect_ratio(child2) > max_aspect_ratio
+        ):
             continue
-        
+
         # Compute variation drop
         pixels1 = image_bgr[child1 > 0]
         pixels2 = image_bgr[child2 > 0]
         var1 = pixels1.std() if pixels1.size > 0 else 1e6
         var2 = pixels2.std() if pixels2.size > 0 else 1e6
         min_child_var = min(var1, var2)
-        
+
         if parent_variation > 0:
             variation_drop = (parent_variation - min_child_var) / parent_variation
         else:
             variation_drop = 0
-        
+
         # Orientation score (prefer axis-aligned)
         dx = x2_line - x1_line
         dy = y2_line - y1_line
         angle_folded = np.arctan2(dy, dx) % (np.pi / 2)
         orientation_score = 1 - np.sin(2 * angle_folded)
-        
-        overall_score = variation_drop * (orientation_score ** 2)
-        
+
+        overall_score = variation_drop * (orientation_score**2)
+
         if overall_score > best_score:
             if overall_score >= min_score or depth < ignore_min_score:
                 best_score = overall_score
                 best_split = (child1, child2, overall_score)
-    
+
     return best_split
 
 
@@ -307,11 +346,20 @@ def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score,
 # Main Recursive Segmentation Function
 # ============================================================================
 
-def recursive_segment(image, mask=None, depth=0, method='rect', 
-                     verbose=False, _split_count=[0], _depth_masks=None, **params):
+
+def recursive_segment(
+    image,
+    mask=None,
+    depth=0,
+    method="rect",
+    verbose=False,
+    _split_count=[0],
+    _depth_masks=None,
+    **params,
+):
     """
     Recursively segment an image using either rectangular or Hough line splits.
-    
+
     Parameters:
     -----------
     image : ndarray
@@ -328,15 +376,15 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
         Internal parameter for collecting masks by depth (for GIF generation)
     **params : dict
         Method-specific parameters
-        
+
     Returns:
     --------
     masks : list of ndarray
         List of binary masks for leaf segments
     """
     H, W = image.shape[:2]
-    max_depth = params.get('max_depth', 10)
-    
+    max_depth = params.get("max_depth", 10)
+
     # Initialize mask and depth tracking if at root
     if mask is None:
         mask = np.ones((H, W), dtype=np.uint8)
@@ -345,70 +393,79 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
             _depth_masks.clear()
             for d in range(max_depth + 1):
                 _depth_masks[d] = []
-    
+
     # Record mask at current depth
     if _depth_masks is not None:
         _depth_masks[depth].append(mask.copy())
-    
+
     # Common stopping conditions
-    min_pixels = params.get('min_pixels', 200)
-    
+    min_pixels = params.get("min_pixels", 200)
+
     if depth >= max_depth:
         return [mask]
-    
+
     if mask.sum() < min_pixels:
         return []
-    
+
     # Method-specific validation and splitting
-    if method == 'rect':
-        min_size_factor = params.get('min_size_factor', None)
-        min_size = params.get('min_size', None)
-        score_threshold = params.get('score_threshold', 0.2)
-        center_penalty = params.get('center_penalty', 0.2)
-        soft_aspect_threshold = params.get('soft_aspect_threshold', 3.0)
-        hard_aspect_threshold = params.get('hard_aspect_threshold', 5.0)
-        min_child_ratio = params.get('min_child_ratio', 0.3)
-        
+    if method == "rect":
+        min_size_factor = params.get("min_size_factor", None)
+        min_size = params.get("min_size", None)
+        score_threshold = params.get("score_threshold", 0.2)
+        center_penalty = params.get("center_penalty", 0.2)
+        soft_aspect_threshold = params.get("soft_aspect_threshold", 3.0)
+        hard_aspect_threshold = params.get("hard_aspect_threshold", 5.0)
+        min_child_ratio = params.get("min_child_ratio", 0.3)
+
         # Compute min_size if not provided
         if min_size is None:
             if min_size_factor is None:
                 min_size = min(H, W) // 20
             else:
                 min_size = int(min(H, W) * min_size_factor)
-        
+
         seg_bbox = mask_to_bbox(mask)
         if seg_bbox is None:
             return []
-        
+
         # Convert to grayscale if needed
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         else:
             gray = image
-        
-        split_info = find_best_rect_split(gray, seg_bbox, min_size, score_threshold,
-                                         center_penalty, soft_aspect_threshold,
-                                         hard_aspect_threshold)
-        
+
+        split_info = find_best_rect_split(
+            gray,
+            seg_bbox,
+            min_size,
+            score_threshold,
+            center_penalty,
+            soft_aspect_threshold,
+            hard_aspect_threshold,
+        )
+
         if split_info is None:
             return [mask]
-        
+
         # Get score
         direction, pos = split_info
-        best_score = score_rect_split(gray, seg_bbox, pos, direction,
-                                      center_penalty, soft_aspect_threshold)
-        
+        best_score = score_rect_split(
+            gray, seg_bbox, pos, direction, center_penalty, soft_aspect_threshold
+        )
+
         # Split mask
         child1, child2 = split_rect_mask(mask, split_info)
-        
+
         # Print verbose info
         if verbose:
             _split_count[0] += 1
-            print(f"Depth {depth} | Split {_split_count[0]}: "
-                  f"score={best_score:.3f}, direction={direction}, pos={pos}, "
-                  f"child ratios={child1.sum()/mask.sum():.2f}, "
-                  f"{child2.sum()/mask.sum():.2f}")
-        
+            print(
+                f"Depth {depth} | Split {_split_count[0]}: "
+                f"score={best_score:.3f}, direction={direction}, pos={pos}, "
+                f"child ratios={child1.sum()/mask.sum():.2f}, "
+                f"{child2.sum()/mask.sum():.2f}"
+            )
+
         # Check min_child_ratio
         child1_bbox = mask_to_bbox(child1)
         child2_bbox = mask_to_bbox(child2)
@@ -417,62 +474,76 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
             child1_h = child1_bbox[3] - child1_bbox[1]
             child2_w = child2_bbox[2] - child2_bbox[0]
             child2_h = child2_bbox[3] - child2_bbox[1]
-            
-            if not ((child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio) and
-                    (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)):
+
+            if not (
+                (child1_w >= W * min_child_ratio or child1_h >= H * min_child_ratio)
+                and (child2_w >= W * min_child_ratio or child2_h >= H * min_child_ratio)
+            ):
                 return [mask]
-        
-    elif method == 'hough':
-        min_side_fraction = params.get('min_side_fraction', 0.3)
-        max_aspect_ratio = params.get('max_aspect_ratio', 10)
-        pad = params.get('pad', 5)
-        n_hough_lines = params.get('n_hough_lines', 10)
-        min_score = params.get('min_score', 0.01)
-        ignore_min_score = params.get('ignore_min_score', 20)
-        
+
+    elif method == "hough":
+        min_side_fraction = params.get("min_side_fraction", 0.3)
+        max_aspect_ratio = params.get("max_aspect_ratio", 10)
+        pad = params.get("pad", 5)
+        n_hough_lines = params.get("n_hough_lines", 10)
+        min_score = params.get("min_score", 0.01)
+        ignore_min_score = params.get("ignore_min_score", 20)
+
         # Check size constraints on parent
         longest_side = get_longest_bbox_side(mask)
         if longest_side / min(H, W) < min_side_fraction:
             return []
-        
+
         # Check aspect ratio on parent
         aspect = get_rotated_aspect_ratio(mask)
         if aspect > max_aspect_ratio:
             return []
-        
+
         # Find best split (child validation happens inside)
         split_result = find_best_hough_split(
-            image, mask, pad, n_hough_lines, min_score, depth, ignore_min_score,
-            min_pixels, min_side_fraction, max_aspect_ratio
+            image,
+            mask,
+            pad,
+            n_hough_lines,
+            min_score,
+            depth,
+            ignore_min_score,
+            min_pixels,
+            min_side_fraction,
+            max_aspect_ratio,
         )
-        
+
         if split_result is None:
             return [mask]
-        
+
         child1, child2, score = split_result
-        
+
         # Print verbose info
         if verbose:
             _split_count[0] += 1
-            print(f"Depth {depth} | Split {_split_count[0]}: "
-                  f"score={score:.3f}, "
-                  f"child pixels={child1.sum()}, {child2.sum()}, "
-                  f"child ratios={child1.sum()/mask.sum():.2f}, "
-                  f"{child2.sum()/mask.sum():.2f}")
-    
+            print(
+                f"Depth {depth} | Split {_split_count[0]}: "
+                f"score={score:.3f}, "
+                f"child pixels={child1.sum()}, {child2.sum()}, "
+                f"child ratios={child1.sum()/mask.sum():.2f}, "
+                f"{child2.sum()/mask.sum():.2f}"
+            )
+
     else:
         raise ValueError(f"Unknown method: {method}")
-    
+
     # Validate children before recursing
     if child1.sum() < min_pixels or child2.sum() < min_pixels:
         return [mask]
-    
+
     # Recurse on children
-    masks1 = recursive_segment(image, child1, depth + 1, method, verbose, 
-                               _split_count, _depth_masks, **params)
-    masks2 = recursive_segment(image, child2, depth + 1, method, verbose,
-                               _split_count, _depth_masks, **params)
-    
+    masks1 = recursive_segment(
+        image, child1, depth + 1, method, verbose, _split_count, _depth_masks, **params
+    )
+    masks2 = recursive_segment(
+        image, child2, depth + 1, method, verbose, _split_count, _depth_masks, **params
+    )
+
     return masks1 + masks2
 
 
@@ -480,24 +551,25 @@ def recursive_segment(image, mask=None, depth=0, method='rect',
 # SegmentationResult Class
 # ============================================================================
 
+
 class SegmentationResult:
     """Container for segmentation results including tree structure."""
-    
+
     def __init__(self, masks, depth_masks, method, params):
         self.masks = masks  # Final leaf masks
         self.depth_masks = depth_masks  # Masks organized by depth
         self.method = method
         self.params = params
-    
+
     def save(self, filepath):
         """Save segmentation result to file."""
-        with open(filepath, 'wb') as f:
+        with open(filepath, "wb") as f:
             pickle.dump(self, f)
-    
+
     @staticmethod
     def load(filepath):
         """Load segmentation result from file."""
-        with open(filepath, 'rb') as f:
+        with open(filepath, "rb") as f:
             return pickle.load(f)
 
 
@@ -505,14 +577,24 @@ class SegmentationResult:
 # Convenience Functions
 # ============================================================================
 
-def segment_rect(image, min_size_factor=None, min_size=None, 
-                 center_penalty=0.2, soft_aspect_threshold=3.0,
-                 hard_aspect_threshold=5.0, score_threshold=0.2,
-                 min_child_ratio=0.3, max_depth=10, min_pixels=200,
-                 verbose=False, return_tree=True):
+
+def segment_rect(
+    image,
+    min_size_factor=None,
+    min_size=None,
+    center_penalty=0.2,
+    soft_aspect_threshold=3.0,
+    hard_aspect_threshold=5.0,
+    score_threshold=0.2,
+    min_child_ratio=0.3,
+    max_depth=10,
+    min_pixels=200,
+    verbose=False,
+    return_tree=True,
+):
     """
     Segment image using rectangular Sobel-based splits.
-    
+
     Parameters:
     -----------
     image : ndarray
@@ -539,45 +621,59 @@ def segment_rect(image, min_size_factor=None, min_size=None,
         Print info each time a split is made
     return_tree : bool
         If True, return SegmentationResult with tree data. If False, return just masks.
-    
+
     Returns:
     --------
     SegmentationResult (if return_tree=True) or list of masks (if return_tree=False)
     """
     params = {
-        'min_size_factor': min_size_factor,
-        'min_size': min_size,
-        'center_penalty': center_penalty,
-        'soft_aspect_threshold': soft_aspect_threshold,
-        'hard_aspect_threshold': hard_aspect_threshold,
-        'score_threshold': score_threshold,
-        'min_child_ratio': min_child_ratio,
-        'max_depth': max_depth,
-        'min_pixels': min_pixels
+        "min_size_factor": min_size_factor,
+        "min_size": min_size,
+        "center_penalty": center_penalty,
+        "soft_aspect_threshold": soft_aspect_threshold,
+        "hard_aspect_threshold": hard_aspect_threshold,
+        "score_threshold": score_threshold,
+        "min_child_ratio": min_child_ratio,
+        "max_depth": max_depth,
+        "min_pixels": min_pixels,
     }
-    
+
     if return_tree:
         depth_masks = {}
-        masks = recursive_segment(image, method='rect', verbose=verbose, 
-                                 _depth_masks=depth_masks, **params)
+        masks = recursive_segment(
+            image, method="rect", verbose=verbose, _depth_masks=depth_masks, **params
+        )
         if verbose:
             print(f"\nTotal segments: {len(masks)}")
-        return SegmentationResult(masks, depth_masks, 'rect', params)
+        return SegmentationResult(masks, depth_masks, "rect", params)
     else:
-        masks = recursive_segment(image, method='rect', verbose=verbose, **params)
+        masks = recursive_segment(image, method="rect", verbose=verbose, **params)
         if verbose:
             print(f"\nTotal segments: {len(masks)}")
         return masks
 
 
-def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
-                  pad=5, min_child_ratio=0.2, min_score=0.01, 
-                  n_hough_lines=10, max_aspect_ratio=10,
-                  denoise=True, nlm_h=20, nlm_patch_size=15, nlm_search_size=45,
-                  ignore_min_score=5, verbose=False, return_tree=True):
+def segment_hough(
+    image,
+    max_depth=10,
+    min_pixels=None,
+    min_side_fraction=0.3,
+    pad=5,
+    min_child_ratio=0.2,
+    min_score=0.01,
+    n_hough_lines=10,
+    max_aspect_ratio=10,
+    denoise=True,
+    nlm_h=20,
+    nlm_patch_size=15,
+    nlm_search_size=45,
+    ignore_min_score=5,
+    verbose=False,
+    return_tree=True,
+):
     """
     Segment image using Hough line splits with variation scoring.
-    
+
     Parameters:
     -----------
     image : ndarray
@@ -610,7 +706,7 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
         Print info each time a split is made
     return_tree : bool
         If True, return SegmentationResult with tree data. If False, return just masks.
-    
+
     Returns:
     --------
     SegmentationResult (if return_tree=True) or list of masks (if return_tree=False)
@@ -621,44 +717,50 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
         image = cv2.fastNlMeansDenoisingColored(
             image,
             None,
-            h=nlm_h, hColor=nlm_h,
+            h=nlm_h,
+            hColor=nlm_h,
             templateWindowSize=nlm_patch_size,
             searchWindowSize=nlm_search_size,
         )
 
     # Apply CLAHE preprocessing
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    l = clahe.apply(l)
-    lab = cv2.merge([l, a, b])
+    img_l, img_a, img_b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    img_l = clahe.apply(img_l)
+    lab = cv2.merge([img_l, img_a, img_b])
     image_proc = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     # Default min_pixels to 1% of image area
     if min_pixels is None:
         min_pixels = int(image.shape[0] * image.shape[1] * 0.01)
-    
+
     params = {
-        'max_depth': max_depth,
-        'min_pixels': min_pixels,
-        'min_side_fraction': min_side_fraction,
-        'pad': pad,
-        'min_child_ratio': min_child_ratio,
-        'min_score': min_score,
-        'n_hough_lines': n_hough_lines,
-        'max_aspect_ratio': max_aspect_ratio,
-        'ignore_min_score': ignore_min_score,
+        "max_depth": max_depth,
+        "min_pixels": min_pixels,
+        "min_side_fraction": min_side_fraction,
+        "pad": pad,
+        "min_child_ratio": min_child_ratio,
+        "min_score": min_score,
+        "n_hough_lines": n_hough_lines,
+        "max_aspect_ratio": max_aspect_ratio,
+        "ignore_min_score": ignore_min_score,
     }
-    
+
     if return_tree:
         depth_masks = {}
-        masks = recursive_segment(image_proc, method='hough', verbose=verbose, 
-                                 _depth_masks=depth_masks, **params)
+        masks = recursive_segment(
+            image_proc,
+            method="hough",
+            verbose=verbose,
+            _depth_masks=depth_masks,
+            **params,
+        )
         if verbose:
             print(f"\nTotal segments: {len(masks)}")
-        return SegmentationResult(masks, depth_masks, 'hough', params)
+        return SegmentationResult(masks, depth_masks, "hough", params)
     else:
-        masks = recursive_segment(image_proc, method='hough', verbose=verbose, **params)
+        masks = recursive_segment(image_proc, method="hough", verbose=verbose, **params)
         if verbose:
             print(f"\nTotal segments: {len(masks)}")
         return masks

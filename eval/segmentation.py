@@ -1,10 +1,12 @@
-import numpy as np
 import json
 import os
-import cv2
 from math import log2
+
+import cv2
 import matplotlib.pyplot as plt
+import numpy as np
 from sklearn.metrics import adjusted_rand_score
+
 
 # -------------------------------------------------------------
 # Variation of Information (unchanged)
@@ -69,7 +71,7 @@ def load_binary_mask(mask_path):
     m = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     if m is None:
         raise ValueError(f"Could not load mask: {mask_path}")
-    return (m > 0).astype(np.int32)   # ensure 0/1 mask
+    return (m > 0).astype(np.int32)  # ensure 0/1 mask
 
 
 def polygons_to_label_mask(img_h, img_w, polygons):
@@ -125,7 +127,6 @@ def evaluate_segmentation(eval_dir, segmentation_function):
     results = []
 
     for filename, gt_polygons in gt_data.items():
-
         img_path = os.path.join(eval_dir, filename)
         img = cv2.imread(img_path)
 
@@ -137,7 +138,7 @@ def evaluate_segmentation(eval_dir, segmentation_function):
 
         # ---- Predicted mask ----
         pred_result = segmentation_function(img)
-        pred_binary_masks = pred_result.masks # shape (N,H,W) or list of (H,W)
+        pred_binary_masks = pred_result.masks  # shape (N,H,W) or list of (H,W)
         mask_pred = binary_masks_to_label_mask(pred_binary_masks)
 
         # ---- GT label mask ----
@@ -154,17 +155,17 @@ def evaluate_segmentation(eval_dir, segmentation_function):
 
         print(f"{filename}: VI = {vi:.4f} | ARI = {ari:.4f}")
         results.append((filename, vi, ari))
-    
+
     vi_values = np.array([r[1] for r in results], dtype=float)
     ari_values = np.array([r[2] for r in results], dtype=float)
 
     vi_mean = vi_values.mean()
-    vi_std  = vi_values.std(ddof=1)     # sample std
+    vi_std = vi_values.std(ddof=1)  # sample std
 
     ari_mean = ari_values.mean()
-    ari_std  = ari_values.std(ddof=1)
+    ari_std = ari_values.std(ddof=1)
 
-    print("\n"+"-"*20+"\nFinal Results\n"+"-"*20)
+    print("\n" + "-" * 20 + "\nFinal Results\n" + "-" * 20)
     print(f"VI:  {vi_mean:.4f} ± {vi_std:.4f}")
     print(f"ARI: {ari_mean:.4f} ± {ari_std:.4f}")
     return (vi_mean, vi_std), (ari_mean, ari_std)
@@ -192,13 +193,23 @@ def visualize_boundaries(img, binary_masks, thickness=2):
         mask = binary_masks[i].astype(np.uint8)
         if np.any(mask):
             # Find contours
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(vis, contours, -1, color=tuple(int(c) for c in colors[i]), thickness=thickness)
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            cv2.drawContours(
+                vis,
+                contours,
+                -1,
+                color=tuple(int(c) for c in colors[i]),
+                thickness=thickness,
+            )
 
     return vis
 
 
-def compare_segmentations(eval_dir, segmentation_function1, segmentation_function2, image_index):
+def compare_segmentations(
+    eval_dir, segmentation_function1, segmentation_function2, image_index
+):
     """
     eval_dir: directory with images and ground_truth.json
     segmentation_functionX: function(img) -> list of binary masks (N,H,W)
@@ -209,7 +220,7 @@ def compare_segmentations(eval_dir, segmentation_function1, segmentation_functio
     gt_path = f"{eval_dir}/ground_truth.json"
 
     # Load image
-    img = cv2.imread(img_path)[:,:,::-1]  # BGR -> RGB
+    img = cv2.imread(img_path)[:, :, ::-1]  # BGR -> RGB
     h, w = img.shape[:2]
 
     # Load GT polygons
@@ -247,13 +258,13 @@ def compare_segmentations(eval_dir, segmentation_function1, segmentation_functio
     vis2 = visualize_boundaries(img, pred2_masks)
 
     # Display side by side
-    plt.figure(figsize=(12,6))
-    plt.subplot(1,2,1)
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
     plt.imshow(vis1)
     plt.title(f"Segmentation 1 (VI={vi1:.2f} | ARI={ari1:.2f})")
     plt.axis("off")
 
-    plt.subplot(1,2,2)
+    plt.subplot(1, 2, 2)
     plt.imshow(vis2)
     plt.title(f"Segmentation 2 (VI={vi2:.2f} | ARI={ari2:.2f})")
     plt.axis("off")
