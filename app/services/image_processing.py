@@ -571,9 +571,9 @@ def segment_rect(image, min_size_factor=None, min_size=None,
 
 
 def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
-                  pad=5, min_child_ratio=0.2, min_score=0.05, 
+                  pad=5, min_child_ratio=0.2, min_score=0.01, 
                   n_hough_lines=10, max_aspect_ratio=10,
-                  blur=True, blur_ksize=(7, 7), blur_sigma=3, 
+                  denoise=True, nlm_h=20, nlm_patch_size=15, nlm_search_size=45,
                   ignore_min_score=5, verbose=False, return_tree=True):
     """
     Segment image using Hough line splits with variation scoring.
@@ -615,6 +615,17 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
     --------
     SegmentationResult (if return_tree=True) or list of masks (if return_tree=False)
     """
+
+    # Denoise
+    if denoise:
+        image = cv2.fastNlMeansDenoisingColored(
+            image,
+            None,
+            h=nlm_h, hColor=nlm_h,
+            templateWindowSize=nlm_patch_size,
+            searchWindowSize=nlm_search_size,
+        )
+
     # Apply CLAHE preprocessing
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
@@ -623,9 +634,6 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
     lab = cv2.merge([l, a, b])
     image_proc = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-    if blur:
-        image_proc = cv2.GaussianBlur(image_proc, blur_ksize, blur_sigma)
-    
     # Default min_pixels to 1% of image area
     if min_pixels is None:
         min_pixels = int(image.shape[0] * image.shape[1] * 0.01)

@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from PIL import Image
+from .image_processing import mask_to_bbox
 
 def draw_segment_boundaries(image, all_masks, boundary_color=(255, 165, 0), 
                             thickness=2):
@@ -45,52 +46,82 @@ def create_mean_value_image(image, masks):
     return result
 
 
-def visualize_selected_segment(image, masks, selected_mask_idx, 
-                               highlight_color=(255, 165, 0), thickness=4, 
-                               dash_length=5):
+def visualize_selected_segment(
+        image, masks, selected_mask_idx,
+        highlight_color=(255, 165, 0),
+        mask_tint_color=(60, 60, 60),     # darker shade applied to mask interior
+        mask_tint_alpha=0.4,             # 0 = no tint, 1 = full tint
+        thickness=3,
+        dash_length=6):
     """
-    Create mean-valued segmentation image and highlight selected segment.
+    Visualize segmentation with a dashed contour tightly around the mask shape
+    and optionally tint the mask interior.
 
     Args:
         image: Original image (H,W,3)
         masks: list of binary masks
         selected_mask_idx: index of mask to highlight
-        highlight_color: RGB color for highlight
-        thickness: line thickness
-        dash_length: length of dashes in dashed line
+        highlight_color: BGR/RGB dashed outline color
+        mask_tint_color: color blended into the mask interior
+        mask_tint_alpha: blend amount [0-1]
+        thickness: thickness of dashed outline
+        dash_length: dash length for dashed contour
 
     Returns:
-        vis_img: mean-valued image with dashed box around selected segment
+        vis_img: mean-value image with contour highlight
     """
-    # Create mean value image
-    mean_img = create_mean_value_image(image, masks)
-    
-    # Get selected mask and its bounding box
+
+    # Step 1 — mean-filled background
+    vis_img = create_mean_value_image(image, masks)
+
     if selected_mask_idx >= len(masks):
-        return mean_img
-    
-    selected_mask = masks[selected_mask_idx]
-    bbox = mask_to_bbox(selected_mask)
-    
-    if bbox is None:
-        return mean_img
-    
-    x1, y1, x2, y2 = bbox
-    
-    # Draw dashed box around selected segment
-    for i in range(x1, x2, dash_length * 2):
-        cv2.line(mean_img, (i, y1), (min(i + dash_length, x2), y1), 
-                highlight_color, thickness)
-        cv2.line(mean_img, (i, y2), (min(i + dash_length, x2), y2), 
-                highlight_color, thickness)
-    
-    for i in range(y1, y2, dash_length * 2):
-        cv2.line(mean_img, (x1, i), (x1, min(i + dash_length, y2)), 
-                highlight_color, thickness)
-        cv2.line(mean_img, (x2, i), (x2, min(i + dash_length, y2)), 
-                highlight_color, thickness)
-    
-    return mean_img
+        return vis_img
+
+    selected_mask = masks[selected_mask_idx].astype(np.uint8)
+
+    # Step 2 — optional interior tint
+    if mask_tint_alpha > 0:
+        tint = np.full_like(vis_img, mask_tint_color, dtype=np.uint8)
+        mask_3c = np.stack([selected_mask]*3, axis=-1)
+        vis_img = np.where(mask_3c == 1,
+                           (vis_img * (1 - mask_tint_alpha) + tint * mask_tint_alpha).astype(np.uint8),
+                           vis_img)
+
+    # Step 3 — find tight contour(s)
+    contours, _ = cv2.findContours(selected_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if len(contours) == 0:
+        return vis_img
+
+    # Step 4 — draw dashed contour
+    for contour in contours:
+        contour = contour.squeeze()
+        if len(contour.shape) != 2:
+            continue
+
+        # walk along contour as polyline and draw dashed segments
+        for i in range(len(contour)):
+            p1 = tuple(contour[i])
+            p2 = tuple(contour[(i + 1) % len(contour)])
+
+            # get segment vector length
+            seg_len = int(np.linalg.norm(np.array(p2) - np.array(p1)))
+            if seg_len == 0:
+                continue
+
+            # interpolate points along segment
+            for offset in range(0, seg_len, dash_length * 2):
+                start_t = offset / seg_len
+                end_t   = min(offset + dash_length, seg_len) / seg_len
+
+                s = (int(p1[0] + (p2[0] - p1[0]) * start_t),
+                     int(p1[1] + (p2[1] - p1[1]) * start_t))
+                e = (int(p1[0] + (p2[0] - p1[0]) * end_t),
+                     int(p1[1] + (p2[1] - p1[1]) * end_t))
+
+                cv2.line(vis_img, s, e, highlight_color, thickness)
+
+    return vis_img
 
 
 def create_segmentation_gif(image, segmentation_result, output_path=None,
@@ -150,9 +181,16 @@ def create_segmentation_gif(image, segmentation_result, output_path=None,
     if highlight_idx is None:
         final_frame = create_mean_value_image(image, segmentation_result.masks)
     else:
-        final_frame = visualize_selected_segment(image, segmentation_result.masks, 
-                                                 highlight_idx, boundary_color, 
-                                                 thickness)
+        final_frame = visualize_selected_segment(
+            image,
+            segmentation_result.masks,
+            highlight_idx,
+            highlight_color=boundary_color, 
+            mask_tint_color=boundary_color,
+            mask_tint_alpha=0.4,
+            thickness=3,
+            dash_length=6
+        )
     
     gif_frames.append(final_frame)
     durations.append(final_duration)

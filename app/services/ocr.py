@@ -4,7 +4,7 @@ from rapidocr_onnxruntime import RapidOCR
 import numpy as np
 from PIL import Image
 import cv2
-from image_processing import mask_to_bbox
+from .image_processing import mask_to_bbox
 
 engine = RapidOCR()
 
