@@ -374,7 +374,7 @@ def recursive_segment(
         Print information each time a split is made
     _depth_masks : dict, optional
         Internal parameter for collecting masks by depth (for GIF generation)
-    **params : dict
+    params : dict
         Method-specific parameters
 
     Returns:

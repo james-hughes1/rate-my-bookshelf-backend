@@ -34,3 +34,21 @@ To upload the container to the cloud:
 `docker tag bookshelf-backend:latest europe-west1-docker.pkg.dev/<project-id>/docker-repo/bookshelf-backend:latest`
 
 `docker push europe-west1-docker.pkg.dev/<project-id>/docker-repo/bookshelf-backend:latest`
+
+## Further development functions
+
+To install pre-commit hooks (codestyling):
+
+`poetry run pre-commit install`
+
+Unit tests:
+
+`poetry run pytest`
+
+Build docs:
+
+`cd docs`
+
+`poetry run sphinx-apidoc -o source/ ../app`
+
+`poetry run sphinx-build -b html source build`

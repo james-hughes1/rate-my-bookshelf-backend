@@ -198,15 +198,7 @@ def get_books_from_ocr(ocr_data):
         ocr_data: string containing all OCR scan text (can be multiline)
 
     Returns:
-        List[Dict] of book information, e.g.
-        [
-            {
-                "idx": 0,
-                "title": "The Bell Jar",
-                "author": "Sylvia Plath",
-                "confidence": 0.7},
-            ...
-        ]
+        List[Dict] of book information
     """
     # Craft the prompt
 

@@ -4,3 +4,6 @@ venv_paddle
 .vscode/
 images/archive/
 .coverage
+
+# Docs
+docs/build/
