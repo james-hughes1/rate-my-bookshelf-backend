@@ -23,7 +23,7 @@ def read_image(image_path, max_dim):
 # Helper Functions
 # ============================================================================
 
-def compute_mask_bbox(mask, pad=0):
+def mask_to_bbox(mask, pad=0):
     """Get bounding box of mask with optional padding."""
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
@@ -34,14 +34,6 @@ def compute_mask_bbox(mask, pad=0):
     x1 = max(int(xs.min()) - pad, 0)
     x2 = min(int(xs.max()) + pad, W - 1)
     return (x1, y1, x2, y2)
-
-
-def mask_to_bbox(mask):
-    """Convert mask to simple axis-aligned bounding box (x1, y1, x2, y2)."""
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return None
-    return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
 
 
 def get_rotated_aspect_ratio(mask):
@@ -209,7 +201,7 @@ def find_best_hough_split(image_bgr, mask, pad, n_hough_lines, min_score,
                           max_aspect_ratio):
     """Find best Hough line split for a mask."""
     H, W = image_bgr.shape[:2]
-    bbox = compute_mask_bbox(mask, pad)
+    bbox = mask_to_bbox(mask, pad)
     if bbox is None:
         return None
     
@@ -510,206 +502,6 @@ class SegmentationResult:
 
 
 # ============================================================================
-# GIF Creation
-# ============================================================================
-
-def draw_segment_boundaries(image, all_masks, boundary_color=(255, 165, 0), 
-                            thickness=2):
-    """Draw boundaries around all segments on the image."""
-    result = image.copy()
-    
-    for mask in all_masks:
-        contours, _ = cv2.findContours(mask.astype(np.uint8), 
-                                       cv2.RETR_EXTERNAL, 
-                                       cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(result, contours, -1, boundary_color, thickness)
-    
-    return result
-
-
-def create_mean_value_image(image, masks):
-    """Create an image where each segment is filled with its mean color."""
-    result = np.zeros_like(image)
-    
-    for mask in masks:
-        if mask.sum() > 0:
-            segment_pixels = image[mask > 0]
-            mean_color = segment_pixels.mean(axis=0).astype(np.uint8)
-            result[mask > 0] = mean_color
-    
-    return result
-
-
-def visualize_selected_segment(image, masks, selected_mask_idx,
-                               highlight_color=(255, 165, 0), thickness=4,
-                               dash_length=5):
-    """
-    Highlight the actual segment (mask) with:
-    - 50% transparent overlay
-    - Dotted outline following the exact mask border
-    """
-    mean_img = create_mean_value_image(image, masks)
-
-    if selected_mask_idx >= len(masks):
-        return mean_img
-
-    selected_mask = masks[selected_mask_idx].astype(np.uint8)  # ensure 0/1
-
-    # Ensure mask is not empty
-    if selected_mask.sum() == 0:
-        return mean_img
-
-    h, w = image.shape[:2]
-
-    # ----- Transparent overlay -----
-    overlay = mean_img.copy()
-    color_arr = np.array(highlight_color, dtype=np.uint8)
-
-    # Create 3-channel mask
-    mask_3c = np.repeat(selected_mask[..., None], 3, axis=2)
-
-    # Blend color onto overlay
-    alpha = 0.5
-    overlay[selected_mask == 1] = (
-        (1 - alpha) * overlay[selected_mask == 1] + alpha * color_arr
-    ).astype(np.uint8)
-
-    mean_img = overlay
-
-    # ----- Compute mask contour -----
-    # Find exact border of mask
-    contours, _ = cv2.findContours(selected_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return mean_img
-
-    contour = max(contours, key=cv2.contourArea)  # largest connected component
-
-    # Flatten contour points into list of pairs
-    contour_points = contour[:, 0, :]  # shape (N, 2)
-
-    # ----- Draw dashed contour -----
-    for i in range(len(contour_points)):
-        p1 = tuple(contour_points[i])
-        p2 = tuple(contour_points[(i + 1) % len(contour_points)])
-
-        # Compute line length
-        dist = np.linalg.norm(np.array(p2) - np.array(p1))
-        if dist == 0:
-            continue
-
-        # Interpolate points along the segment
-        num_dashes = int(dist // (dash_length * 2)) + 1
-
-        for j in range(num_dashes):
-            start_t = (j * 2 * dash_length) / dist
-            end_t = min((j * 2 * dash_length + dash_length) / dist, 1.0)
-
-            if start_t >= 1:
-                break
-
-            # Linear interpolation
-            sx = int(p1[0] + (p2[0] - p1[0]) * start_t)
-            sy = int(p1[1] + (p2[1] - p1[1]) * start_t)
-
-            ex = int(p1[0] + (p2[0] - p1[0]) * end_t)
-            ey = int(p1[1] + (p2[1] - p1[1]) * end_t)
-
-            cv2.line(mean_img, (sx, sy), (ex, ey), highlight_color, thickness)
-
-    return mean_img
-
-
-def create_segmentation_gif(image, segmentation_result, output_path=None,
-                            duration=300, final_duration=2000, loop=0,
-                            boundary_color=(255, 165, 0), thickness=2,
-                            highlight_idx=None, io_buffer=None):
-    """
-    Create an animated GIF from segmentation result.
-    
-    Parameters:
-    -----------
-    image : ndarray
-        Original image
-    segmentation_result : SegmentationResult
-        Result from segment_with_tree()
-    output_path : str, optional
-        Path to save GIF (if None, must provide io_buffer)
-    duration : int
-        Duration of intermediate frames in milliseconds
-    final_duration : int
-        Duration of final frame in milliseconds
-    loop : int
-        Number of loops (0 = infinite)
-    boundary_color : tuple
-        RGB color for boundaries
-    thickness : int
-        Line thickness
-    highlight_idx : int, optional
-        Index of segment to highlight in final frame
-    io_buffer : io.BytesIO, optional
-        Buffer to write GIF to (for FastAPI)
-    """
-    depth_masks = segmentation_result.depth_masks
-    max_depth = max(depth_masks.keys())
-    
-    # Create frames
-    gif_frames = []
-    durations = []
-    
-    # Original image
-    gif_frames.append(image.copy())
-    durations.append(duration)
-    
-    # Add frames for each depth with accumulating boundaries
-    for depth in range(max_depth + 1):
-        if len(depth_masks[depth]) > 0:
-            all_masks_so_far = []
-            for d in range(depth + 1):
-                all_masks_so_far.extend(depth_masks[d])
-            
-            frame = draw_segment_boundaries(image, all_masks_so_far, 
-                                           boundary_color, thickness)
-            gif_frames.append(frame)
-            durations.append(duration)
-    
-    # Final frame with mean values
-    if highlight_idx is None:
-        final_frame = create_mean_value_image(image, segmentation_result.masks)
-    else:
-        final_frame = visualize_selected_segment(image, segmentation_result.masks, 
-                                                 highlight_idx, boundary_color, 
-                                                 thickness)
-    
-    gif_frames.append(final_frame)
-    durations.append(final_duration)
-    
-    # Convert to PIL
-    pil_frames = []
-    for frame in gif_frames:
-        if len(frame.shape) == 3 and frame.shape[2] == 3:
-            pil_frame = Image.fromarray(frame)
-        else:
-            pil_frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        pil_frames.append(pil_frame)
-    
-    # Save GIF
-    if len(pil_frames) > 0:
-        save_kwargs = {
-            'save_all': True,
-            'append_images': pil_frames[1:],
-            'duration': durations,
-            'loop': loop
-        }
-        
-        if output_path is not None:
-            pil_frames[0].save(output_path, **save_kwargs)
-            print(f"GIF saved to {output_path} ({len(pil_frames)} frames)")
-        elif io_buffer is not None:
-            pil_frames[0].save(io_buffer, format='GIF', **save_kwargs)
-            print(f"GIF written to buffer ({len(pil_frames)} frames)")
-
-
-# ============================================================================
 # Convenience Functions
 # ============================================================================
 
@@ -862,76 +654,3 @@ def segment_hough(image, max_depth=10, min_pixels=None, min_side_fraction=0.3,
         if verbose:
             print(f"\nTotal segments: {len(masks)}")
         return masks
-
-
-# ============================================================================
-# Visualization
-# ============================================================================
-
-def visualize_masks(image, masks, max_show=10):
-    """Visualize segmentation masks."""
-    n = min(len(masks), max_show)
-    fig, axes = plt.subplots(n, 2, figsize=(10, 3 * n))
-    if n == 1:
-        axes = axes.reshape(1, -1)
-    
-    for i, mask in enumerate(masks[:n]):
-        bbox = mask_to_bbox(mask)
-        if bbox is None:
-            continue
-        x1, y1, x2, y2 = bbox
-        
-        # Show mask
-        axes[i, 0].imshow(mask, cmap='gray')
-        axes[i, 0].set_title(f'Mask {i+1} ({mask.sum()} pixels)')
-        axes[i, 0].axis('off')
-        
-        # Show cropped region
-        crop = image[y1:y2, x1:x2]
-        axes[i, 1].imshow(crop)
-        axes[i, 1].set_title(f'Crop {i+1}')
-        axes[i, 1].axis('off')
-    
-    plt.tight_layout()
-    plt.show()
-
-
-# ============================================================================
-# Example Usage
-# ============================================================================
-
-"""
-# Example Usage - Simple segmentation (backward compatible)
-image = read_image('image.jpg', max_dim=1024)
-masks_rect = segment_rect(image, min_size_factor=0.05, return_tree=False)
-masks_hough = segment_hough(image, max_depth=8, return_tree=False)
-
-# Example Usage - Segmentation with tree data (default, for GIF creation)
-seg_result = segment_rect(image, min_size_factor=0.05, verbose=True)  # returns SegmentationResult
-masks = seg_result.masks  # Access masks like before
-
-# Save result for later
-seg_result.save('segmentation.pkl')
-
-# Load and create GIF without re-segmenting
-seg_result = SegmentationResult.load('segmentation.pkl')
-create_segmentation_gif(
-    image,
-    seg_result,
-    output_path='segmentation.gif',
-    duration=300,
-    final_duration=2000,
-    boundary_color=(255, 165, 0),
-    highlight_idx=0  # Optional: highlight specific segment
-)
-
-# Create mean-value visualization
-mean_img = create_mean_value_image(image, seg_result.masks)
-plt.imshow(mean_img)
-plt.show()
-
-# Visualize with highlighted segment
-highlighted = visualize_selected_segment(image, seg_result.masks, 0)
-plt.imshow(highlighted)
-plt.show()
-"""

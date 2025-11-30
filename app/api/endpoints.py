@@ -4,13 +4,12 @@ import cv2
 import io
 from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
-from ..services.image_processing import (segment_hough, read_image,
-                                         SegmentationResult, create_segmentation_gif)
+from ..services.image_processing import (segment_rect, segment_hough, read_image,
+                                         SegmentationResult)
 from ..services.ocr import (ocr_from_array, ocr_text_prompt, 
-                            assign_text_to_segments, mask_to_bbox,
-                            create_mean_value_image, visualize_selected_segment)
-from ..services.llm_client import (get_books_from_ocr, format_books_for_prompt, 
-                                   analyse_bookshelf, analyse_library)
+                            assign_text_to_segments, mask_to_bbox)
+from ..services.visualize import visualize_selected_segment, create_segmentation_gif
+from ..services.llm_client import (analyse_bookshelf, analyse_library)
 
 router = APIRouter()
 
@@ -40,7 +39,7 @@ async def upload_bookshelf(file: UploadFile = File(...)):
 
     # Segment image (returns SegmentationResult with tree data)
     print("Segmenting image...")
-    seg_result = segment_hough(img, return_tree=True, verbose=True)
+    seg_result = segment_rect(img, return_tree=True, verbose=True)
     
     # Save segmentation result for later GIF generation
     seg_result.save(f"/tmp/{file.filename}_segmentation.pkl")

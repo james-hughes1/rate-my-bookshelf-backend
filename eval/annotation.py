@@ -24,13 +24,12 @@ def draw_segments(image, polygons, color=(0, 255, 0), thickness=3):
     return img
 
 
-
 # -------------------------------------------------------------
 # Save ground truth as polygons
 # -------------------------------------------------------------
 def save_ground_truth(image, polygons, output_dir="images/eval", index=None):
     """
-    image: numpy array H×W×3 (RGB or BGR – converted correctly below)
+    image: numpy array HxWx3 (RGB or BGR - converted correctly below)
     polygons: list of polygons, each polygon is a list of [x,y] points
     """
 
