@@ -43,7 +43,9 @@ To install pre-commit hooks (codestyling):
 
 Unit tests:
 
-`poetry run pytest`
+`poetry run pytest --cov=app`
+
+Currently, the package only has 24% coverage :(
 
 Build docs:
 
